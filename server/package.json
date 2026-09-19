@@ -1,0 +1,20 @@
+{
+  "name": "pigeon-sdr-api",
+  "version": "1.0.0",
+  "description": "Pigeon SDR API: orchestrator, agent layer and control plane.",
+  "main": "src/index.js",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node scripts/verify.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.116.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "zod": "^4.6.5"
+  }
+}

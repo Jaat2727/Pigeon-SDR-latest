@@ -1,0 +1,15 @@
+# Railway build plan, pinned.
+#
+# Node 22, not 20. @supabase/supabase-js builds a realtime client inside
+# createClient and that constructor asks the runtime for a global WebSocket,
+# which Node 20 does not have. src/db/client.js also supplies a transport so
+# the import cannot fail on an older runtime, but 22 is the supported floor.
+
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.install]
+cmds = ["npm ci --omit=dev || npm install --omit=dev"]
+
+[start]
+cmd = "npm start"
