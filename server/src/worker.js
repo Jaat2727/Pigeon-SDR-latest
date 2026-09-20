@@ -13,6 +13,7 @@ import { env } from './config.js';
 import { supabase, unwrapSoft, dbReady } from './db/client.js';
 import { advance } from './orchestrator/index.js';
 import { getSystemControl } from './orchestrator/gate.js';
+import { acquireLock, releaseLock } from './orchestrator/jobs.js';
 
 let timer = null;
 let running = false;
@@ -41,14 +42,28 @@ async function tick() {
       'worker scan'
     );
 
+    let worked = 0;
+
     for (const row of due) {
-      const result = await advance(row.campaign_id, row.prospect_id);
-      if (result.status === 'error') {
-        console.warn(`[worker] ${row.prospect_id}: ${result.reason}`);
+      // The same lock a manual run takes. Without it, pressing Run in the app
+      // while the worker is mid-pass means two processes advance the same
+      // prospect and it takes two steps at once, which makes the timeline
+      // read as though a step was skipped.
+      const got = await acquireLock(row.campaign_id, row.prospect_id, 'worker');
+      if (!got) continue;
+
+      try {
+        const result = await advance(row.campaign_id, row.prospect_id);
+        worked += 1;
+        if (result.status === 'error') {
+          console.warn(`[worker] ${row.prospect_id}: ${result.reason}`);
+        }
+      } finally {
+        await releaseLock(row.campaign_id, row.prospect_id);
       }
     }
 
-    if (due.length) console.log(`[worker] processed ${due.length}`);
+    if (worked) console.log(`[worker] processed ${worked} of ${due.length} due`);
   } catch (err) {
     console.error('[worker] tick failed:', err.message);
   } finally {

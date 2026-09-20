@@ -21,8 +21,10 @@ import agentRoutes from './routes/agents.js';
 import knowledgeRoutes from './routes/knowledge.js';
 import controlRoutes from './routes/controls.js';
 import repRoutes from './routes/reps.js';
+import jobRoutes from './routes/jobs.js';
 
 import { startWorker } from './worker.js';
+import { reapAbandonedJobs } from './orchestrator/jobs.js';
 
 const app = express();
 
@@ -77,6 +79,7 @@ app.use('/agents', agentRoutes);
 app.use('/knowledge', knowledgeRoutes);
 app.use('/controls', controlRoutes);
 app.use('/reps', repRoutes);
+app.use('/jobs', jobRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -95,14 +98,31 @@ if (report.missing_required.length) {
   console.log(`  missing env      ${report.missing_required.join(', ')}`);
 }
 console.log(`  cors origins     ${report.cors_origins.join(', ')}`);
+console.log(
+  `  llm keys         groq ${report.llm_keys.groq.configured}/${report.llm_keys.groq.max} · ` +
+    `gemini ${report.llm_keys.gemini.configured}/${report.llm_keys.gemini.max}`
+);
+console.log(`  models           ${report.llm_keys.groq.model} · ${report.llm_keys.gemini.model}`);
+console.log(`  discovery        ${report.discovery.source} — ${report.discovery.reason}`);
+console.log(`  run concurrency  ${report.job_concurrency} prospects at a time`);
 console.log('  agent routing');
 for (const [agent, engine] of Object.entries(report.agent_routing)) {
   console.log(`    ${agent.padEnd(20)} ${engine}`);
 }
 console.log(line);
 
-const server = app.listen(env.PORT, env.HOST, () => {
+const server = app.listen(env.PORT, env.HOST, async () => {
   console.log(`Listening on http://${env.HOST}:${env.PORT}`);
+
+  // A job that was mid-flight when this process last died cannot be resumed,
+  // so it is closed out with a reason instead of sitting at "running" forever
+  // and blocking its campaign from starting a new one.
+  try {
+    await reapAbandonedJobs();
+  } catch (err) {
+    console.warn(`[jobs] could not clear old jobs: ${err.message}`);
+  }
+
   if (env.WORKER_ENABLED) startWorker();
   else console.log('Worker is off. Drive the pipeline from the app, or set WORKER_ENABLED=true.');
 });

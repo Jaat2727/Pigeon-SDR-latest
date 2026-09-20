@@ -10,10 +10,19 @@
 import {
   AGENT_SCHEMAS, isEmptyOutput, coerceIcp, coerceResearch, coerceStrategy,
   coercePersonalisation, coerceConversation, toArray, toNumberOrNull, toObject, INTENTS,
+  personName,
 } from '../src/agents/schemas.js';
 import { parseLooseJson } from '../src/lib/json.js';
 import { runLocalEngine } from '../src/agents/localEngine.js';
 import { AGENT_REGISTRY, getAgent, PIPELINE } from '../src/agents/registry.js';
+import {
+  registerKeys, leaseKey, reportSuccess, reportFailure, reviveKey,
+  keyHealth, poolStatus, keyCount, resetPools, MAX_KEYS_PER_PROVIDER,
+} from '../src/agents/keyPool.js';
+import { classify } from '../src/agents/llmEngine.js';
+import { employeeRange, buildSearchFilters, unlockedEmail, mapPerson } from '../src/services/discovery/apollo.js';
+import { appendEvent } from '../src/orchestrator/jobs.js';
+import { readiness } from '../src/routes/campaigns.js';
 
 let pass = 0;
 let fail = 0;
@@ -200,6 +209,194 @@ ok('a security review routes to a human', reply('Send it to our infosec team for
 ok('procurement routes to a human', reply('Our procurement process needs an MSA first.').requires_human === true);
 ok('a plain question does not need a human', reply('How does the research step work?').requires_human === false);
 ok('an out of office is not a human reply', reply('I am out of office until Monday.').is_human_reply === false);
+
+
+/* ── key pool ─────────────────────────────────────────────────────────── */
+group('Key pool');
+
+resetPools();
+registerKeys('groq', [
+  'gsk_key_one_aaaaaaaa', 'gsk_key_two_bbbbbbbb', 'gsk_key_one_aaaaaaaa',
+  'gsk_key_three_cccccc', 'gsk_key_four_dddddd', 'gsk_key_five_eeeeee',
+  'gsk_key_six_ffffff', 'gsk_key_seven_gggggg',
+]);
+
+ok('six keys is the ceiling', keyCount('groq') === MAX_KEYS_PER_PROVIDER);
+ok('a key listed twice counts once',
+  !keyHealth().find((p) => p.provider === 'groq').keys.some((k, i, all) =>
+    all.findIndex((o) => o.label === k.label) !== i));
+ok('no whole key ever leaves the pool',
+  JSON.stringify(keyHealth()).includes('gsk_ke') &&
+  !JSON.stringify(keyHealth()).includes('gsk_key_one_aaaaaaaa'));
+
+resetPools();
+registerKeys('groq', ['gsk_alpha_11111111', 'gsk_bravo_22222222', 'gsk_charlie_33333']);
+
+const leased = [leaseKey('groq'), leaseKey('groq'), leaseKey('groq')].map((k) => k.label);
+ok('leases rotate rather than reusing one key',
+  new Set(leased).size === 3, leased.join(', '));
+ok('a fourth lease comes back round to the first', leaseKey('groq').label === leased[0]);
+
+resetPools();
+registerKeys('groq', ['gsk_alpha_11111111', 'gsk_bravo_22222222']);
+const first = leaseKey('groq');
+reportFailure(first, { kind: 'rate_limited', message: '429' });
+ok('a rate-limited key is benched', poolStatus('groq').cooling === 1);
+ok('the next lease skips the benched key', leaseKey('groq').label !== first.label);
+
+const dead = leaseKey('groq');
+reportFailure(dead, { kind: 'invalid_key', message: '401' });
+ok('a rejected key is disabled, not merely cooled', poolStatus('groq').disabled === 1);
+ok('with every key out, leasing returns nothing rather than a bad key',
+  leaseKey('groq') === null);
+ok('the pool says when a key comes back', poolStatus('groq').next_available_at > Date.now());
+
+ok('reviving puts a key back on the rota',
+  reviveKey('groq', 2).state === 'healthy' && leaseKey('groq') !== null);
+
+resetPools();
+registerKeys('gemini', ['AIza_only_one_key_here']);
+const solo = leaseKey('gemini');
+reportFailure(solo, { kind: 'bad_request', message: '400 malformed' });
+ok('a malformed request is not counted against the key',
+  poolStatus('gemini').healthy === 1 && solo.failed === 0);
+reportSuccess(solo, 240);
+ok('a success clears the consecutive failure count', solo.consecutive_failures === 0);
+
+// A retired model name used to bench the key it was tried on. With one key
+// configured that took the only key out of service, and the retry on the
+// fallback model then failed with "every key is cooling down" — sending you
+// to look at your keys for a problem that was one wrong model string.
+reportFailure(solo, { kind: 'model_not_found', message: '404 model decommissioned' });
+ok('a wrong model name does not bench the key it was tried on',
+  poolStatus('gemini').healthy === 1 && solo.state === 'healthy');
+ok('the model error is still recorded against the key for display',
+  solo.last_error_kind === 'model_not_found');
+ok('success rate is measured over settled calls only',
+  keyHealth().find((p) => p.provider === 'gemini').keys[0].success_rate === 100);
+
+resetPools();
+
+/* ── error classification ─────────────────────────────────────────────── */
+group('Provider error classification');
+
+ok('401 means the key is bad', classify(401) === 'invalid_key');
+ok('403 means the key is bad', classify(403) === 'invalid_key');
+ok('429 means slow down, not throw the key away', classify(429) === 'rate_limited');
+ok('404 means the model name is wrong', classify(404) === 'model_not_found');
+ok('a 400 naming the model is a model problem',
+  classify(400, 'The model `llama-3.1-70b` has been decommissioned') === 'model_not_found');
+ok('a plain 400 is our own malformed request', classify(400, 'invalid json body') === 'bad_request');
+ok('a 503 is the provider having a bad day', classify(503) === 'server_error');
+
+/* ── Apollo ───────────────────────────────────────────────────────────── */
+group('Apollo');
+
+ok('a locked email is never stored as an address',
+  unlockedEmail('email_not_unlocked@domain.com') === null);
+ok('the bare placeholder domain is rejected too',
+  unlockedEmail('anything@domain.com') === null);
+ok('a real address survives', unlockedEmail('ayush@arrivio.global') === 'ayush@arrivio.global');
+ok('a locked person is marked locked, not emailable',
+  mapPerson({ email: 'email_not_unlocked@domain.com', title: 'CTO', organization: { name: 'Acme' } })
+    .email_status === 'locked');
+ok('a person with a locked email still arrives with their company',
+  mapPerson({ email: 'email_not_unlocked@domain.com', title: 'CTO', organization: { name: 'Acme' } })
+    .company_name === 'Acme');
+ok('a company URL becomes a bare domain',
+  mapPerson({ title: 'CTO', organization: { name: 'Acme', website_url: 'https://www.acme.com/about' } })
+    .company_domain === 'acme.com');
+
+ok('a hyphenated band parses', employeeRange('50-2000')?.[0] === '50,2000');
+ok('a written band parses', employeeRange('50 to 2000')?.[0] === '50,2000');
+ok('thousands separators do not break it', employeeRange('1,001-5,000')?.[0] === '1001,5000');
+ok('an open-ended band parses', employeeRange('500+')?.[0] === '500,1000000');
+ok('an empty band is no filter at all', employeeRange('') === null);
+
+const filters = buildSearchFilters(
+  { target_roles: ['CTO'], industry: 'B2B SaaS', company_size: '50-2000' },
+  { locations: ['United States'] }
+);
+ok('campaign roles become person titles', filters.person_titles?.[0] === 'CTO');
+ok('the headcount band reaches Apollo', filters.organization_num_employees_ranges?.[0] === '50,2000');
+ok('an override beats the campaign value',
+  buildSearchFilters({ target_roles: ['CTO'] }, { titles: ['VP Sales'] }).person_titles[0] === 'VP Sales');
+ok('per_page is capped at Apollo’s limit',
+  buildSearchFilters({ target_roles: ['CTO'] }, { per_page: 500 }).per_page === 100);
+
+/* ── discovery output ─────────────────────────────────────────────────── */
+group('Discovery');
+
+const coerceDiscovery = AGENT_SCHEMAS.discovery.coerce;
+
+const discovered = coerceDiscovery({
+  candidates: [
+    { company: 'Acme Ltd', website: 'https://www.acme.io/careers', role: 'CTO', confidence: 'High' },
+    { company_name: 'Globex', title: 'VP Engineering', full_name: 'the CTO of Globex' },
+    { company_name: 'NoRole' },
+    { company_name: 'Initech', title: 'CTO', full_name: 'Priya Raman', employee_count: '250' },
+  ],
+  reasoning: 'matched on industry',
+});
+
+ok('alternate field names are understood', discovered.candidates[0].company_name === 'Acme Ltd');
+ok('a website becomes a bare domain', discovered.candidates[0].company_domain === 'acme.io');
+ok('confidence casing is normalised', discovered.candidates[0].confidence === 'high');
+ok('a description dressed up as a name is dropped',
+  discovered.candidates[1].full_name === null);
+ok('a real-looking name is kept', discovered.candidates[2].full_name === 'Priya Raman');
+ok('a role description is never mistaken for a name',
+  personName('the CTO of Globex') === null && personName('Head of Engineering') === null);
+ok('a single word is not a name', personName('Priya') === null);
+ok('a name with a particle survives', personName('Ludwig van Beethoven') === 'Ludwig van Beethoven');
+ok('a hyphenated name survives', personName('Jean-Luc Picard') === 'Jean-Luc Picard');
+ok('an all-lowercase string is not a name', personName('someone at acme') === null);
+ok('a candidate with no role is not a candidate', discovered.candidates.length === 3);
+ok('a headcount given as a string becomes a number',
+  discovered.candidates[2].company_employee_count === 250);
+ok('an empty candidate list fails rather than writing nothing',
+  isEmptyOutput('discovery', coerceDiscovery({ candidates: [] })) === true);
+ok('discovery has no local engine, on purpose', (() => {
+  try {
+    runLocalEngine('discovery', {});
+    return false;
+  } catch (err) {
+    return /no offline fallback/i.test(err.message);
+  }
+})());
+
+/* ── jobs ─────────────────────────────────────────────────────────────── */
+group('Jobs');
+
+let eventJob = { events: [] };
+for (let i = 0; i < 80; i += 1) eventJob = { events: appendEvent(eventJob, { message: `step ${i}` }) };
+ok('the event log is bounded', eventJob.events.length === 60);
+ok('the newest events are the ones kept',
+  eventJob.events[eventJob.events.length - 1].message === 'step 79');
+ok('an event carries a timestamp', Boolean(eventJob.events[0].at));
+ok('a job with no events yet does not throw',
+  appendEvent({}, { message: 'first' }).length === 1);
+
+/* ── campaign readiness ───────────────────────────────────────────────── */
+group('Campaign readiness');
+
+const bare = readiness({ name: 'Untitled', enabled_channels: [] });
+ok('a campaign with no ICP cannot go live', bare.ready === false);
+ok('the missing ICP is named, not just counted',
+  bare.blockers.some((b) => b.field === 'icp_criteria'));
+ok('no channel is also a blocker', bare.blockers.some((b) => b.field === 'enabled_channels'));
+
+const workable = readiness({
+  name: 'US SaaS CTOs',
+  icp_criteria: 'B2B SaaS, 50 to 2000 people, target the CTO.',
+  enabled_channels: ['email'],
+});
+ok('an ICP and a channel are enough to go live', workable.ready === true);
+ok('missing nice-to-haves are warnings, not blockers',
+  workable.warnings.length > 0 && workable.blockers.length === 0);
+ok('a campaign with no target roles is warned that discovery has nothing to search for',
+  workable.warnings.some((w) => w.field === 'target_roles'));
+
 
 /* ── summary ──────────────────────────────────────────────────────────── */
 console.log('\n' + '─'.repeat(62));

@@ -35,6 +35,10 @@ export function mapCampaign(row, extra = {}) {
     working_hours: row.working_hours,
     daily_send_limit: row.daily_send_limit,
     require_approval: row.require_approval,
+    sample_profiles: row.sample_profiles ?? [],
+    // Both the joined rep and the bare id: the UI prints one and the edit
+    // form needs the other to preselect the dropdown.
+    rep_id: row.rep_id ?? null,
     rep: row.reps ? { id: row.reps.id, name: row.reps.full_name, title: row.reps.title } : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -170,6 +174,12 @@ export function mapRun(r) {
     tokens: r.tokens,
     cost_usd: Number(r.cost_usd ?? 0),
     latency_ms: r.latency_ms,
+    // Which provider, model and key served this run. Null on rows written
+    // before db/04-runtime.sql added the columns, and on any run the local
+    // engine answered — the UI prints a dash rather than inventing one.
+    llm_provider: r.llm_provider ?? null,
+    llm_model: r.llm_model ?? null,
+    llm_key: r.llm_key ?? null,
     knowledge_used: (r.retrieved_chunk_ids ?? []).length,
     created_at: r.created_at,
     output: r.output ?? null,

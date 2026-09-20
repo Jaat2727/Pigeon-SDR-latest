@@ -150,7 +150,9 @@ export function scheduleSequence(sequence, workingHours = {}) {
  * @returns {Promise<{status, state, reason?, engine?, degraded?}>}
  *   status is one of: advanced, blocked, done, error
  */
-export async function advance(campaignId, prospectId, { force = false } = {}) {
+export async function advance(campaignId, prospectId, { force = false, signal = null } = {}) {
+  if (signal?.aborted) return { status: 'cancelled', reason: 'Cancelled before this step started' };
+
   const { campaign, prospect, cp } = await loadContext(campaignId, prospectId);
 
   if (!campaign) return { status: 'error', reason: 'Campaign not found' };
@@ -218,7 +220,12 @@ export async function advance(campaignId, prospectId, { force = false } = {}) {
     _agent_prompt: prompts[step] ?? null,
   });
 
-  const baseMeta = { campaignId, prospectId };
+  // `signal` rides along on every agent call, so cancelling a job aborts the
+  // HTTP request to Groq or Gemini rather than waiting for it to come back.
+  const baseMeta = { campaignId, prospectId, signal };
+
+  /** A cancelled call is not a failed step. It is a step that did not happen. */
+  const cancelled = (result) => result.cancelled === true;
 
   try {
     switch (step) {
@@ -238,6 +245,7 @@ export async function advance(campaignId, prospectId, { force = false } = {}) {
           { ...baseMeta, localPayload: { stub: prospect } }
         );
 
+        if (cancelled(result)) return { status: 'cancelled', state, reason: 'Cancelled mid-step' };
         if (!result.success) return { status: 'error', state, reason: result.error };
 
         await supabase
@@ -300,6 +308,7 @@ export async function advance(campaignId, prospectId, { force = false } = {}) {
           }
         );
 
+        if (cancelled(result)) return { status: 'cancelled', state, reason: 'Cancelled mid-step' };
         if (!result.success) return { status: 'error', state, reason: result.error };
 
         const out = result.output;
@@ -432,6 +441,7 @@ export async function advance(campaignId, prospectId, { force = false } = {}) {
           }
         );
 
+        if (cancelled(result)) return { status: 'cancelled', state, reason: 'Cancelled mid-step' };
         if (!result.success) return { status: 'error', state, reason: result.error };
 
         const out = result.output;
@@ -589,6 +599,7 @@ export async function advance(campaignId, prospectId, { force = false } = {}) {
           }
         );
 
+        if (cancelled(result)) return { status: 'cancelled', state, reason: 'Cancelled mid-step' };
         if (!result.success) return { status: 'error', state, reason: result.error };
 
         const out = result.output;
@@ -731,10 +742,18 @@ export async function advance(campaignId, prospectId, { force = false } = {}) {
 }
 
 /** Keeps calling `advance` until it stops making progress. */
-export async function advanceUntilBlocked(campaignId, prospectId, { maxSteps = 6, force = false } = {}) {
+export async function advanceUntilBlocked(
+  campaignId,
+  prospectId,
+  { maxSteps = 6, force = false, signal = null } = {}
+) {
   const steps = [];
   for (let i = 0; i < maxSteps; i += 1) {
-    const result = await advance(campaignId, prospectId, { force });
+    if (signal?.aborted) {
+      steps.push({ status: 'cancelled', reason: 'Cancelled' });
+      break;
+    }
+    const result = await advance(campaignId, prospectId, { force, signal });
     steps.push(result);
     if (result.status !== 'advanced') break;
     if (TERMINAL.has(result.state)) break;
@@ -836,7 +855,7 @@ const STATE_BY_INTENT = {
   unclear: 'engaged',
 };
 
-export async function handleReply(campaignId, prospectId, { body, channel = 'email' }) {
+export async function handleReply(campaignId, prospectId, { body, channel = 'email', signal = null }) {
   const { campaign, prospect, cp } = await loadContext(campaignId, prospectId);
   if (!campaign || !prospect || !cp) return { status: 'error', reason: 'Unknown prospect or campaign' };
 
@@ -874,7 +893,7 @@ export async function handleReply(campaignId, prospectId, { body, channel = 'ema
       _system_prompt: prompts.system ?? null,
       _agent_prompt: prompts.conversation ?? null,
     },
-    { campaignId, prospectId, retrievedChunks: chunks, localPayload: { message: body } }
+    { campaignId, prospectId, retrievedChunks: chunks, localPayload: { message: body }, signal }
   );
 
   if (!result.success) return { status: 'error', reason: result.error };
@@ -947,30 +966,10 @@ export async function handleReply(campaignId, prospectId, { body, channel = 'ema
   return { status: 'ok', intent: out.intent, state: nextState, engine: result.engine, output: out };
 }
 
-/** Runs a campaign: picks up prospects that have something to do, advances each. */
-export async function runCampaign(campaignId, { limit = 5, force = false } = {}) {
-  const rows = unwrapSoft(
-    await supabase
-      .from('campaign_prospects')
-      .select('prospect_id, state')
-      .eq('campaign_id', campaignId)
-      .eq('paused', false)
-      .in('state', Object.keys(STEP_BY_STATE).filter((s) => STEP_BY_STATE[s]))
-      .order('created_at', { ascending: true })
-      .limit(limit),
-    [],
-    'campaign_prospects'
-  );
-
-  const results = [];
-  for (const row of rows) {
-    const steps = await advanceUntilBlocked(campaignId, row.prospect_id, { force });
-    results.push({ prospect_id: row.prospect_id, steps });
-  }
-
-  return {
-    picked_up: rows.length,
-    advanced: results.filter((r) => r.steps.some((s) => s.status === 'advanced')).length,
-    results,
-  };
-}
+/**
+ * Running a whole campaign used to live here, synchronously, inside the HTTP
+ * request that asked for it. It now lives in orchestrator/jobs.js as a job
+ * with progress and a cancel button, because four agent calls per prospect is
+ * minutes of work and no browser waits that long. This file keeps the part
+ * that was always correct: one prospect, one step, one honest answer.
+ */

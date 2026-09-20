@@ -405,9 +405,136 @@ export function coerceConversation(raw) {
   };
 }
 
+/* ── discovery ──────────────────────────────────────────────────────── */
+
+const candidateSchema = z.object({
+  company_name: z.string().min(1),
+  company_domain: z.string().nullable(),
+  company_industry: z.string().nullable(),
+  company_employee_count: z.number().nullable(),
+  company_hq: z.string().nullable(),
+  title: z.string().min(1),
+  full_name: z.string().nullable(),
+  linkedin_url: z.string().nullable(),
+  why_this_company: z.string().nullable(),
+  confidence: z.enum(['high', 'medium', 'low']),
+});
+
+const discoverySchema = z.object({
+  candidates: z.array(candidateSchema),
+  search_reasoning: z.string(),
+  caveats: z.array(z.string()),
+});
+
+/**
+ * A domain arrives as anything from "acme.com" to "https://www.acme.com/about".
+ * Everything downstream — the suppression match, the duplicate check — compares
+ * bare hostnames, so one that still carries a scheme or a path silently fails
+ * to match an identical company added another way.
+ */
+function cleanDomain(value) {
+  const raw = toStringOrNull(value);
+  if (!raw) return null;
+  const host = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .split(/[/?#]/)[0];
+  return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(host) ? host : null;
+}
+
+/**
+ * Particles that legitimately appear in lower case inside a person's name.
+ * Without these, "Ludwig van Beethoven" and "Vinod de Souza" get thrown away.
+ */
+const NAME_PARTICLES = new Set([
+  'van', 'von', 'de', 'del', 'della', 'der', 'den', 'di', 'da', 'do', 'dos', 'das',
+  'la', 'le', 'du', 'bin', 'ibn', 'al', 'el', 'ter', 'ten', 'op', "'t", 'y', 'san',
+]);
+
+/** Words that mean this string is describing a role, not naming a person. */
+const ROLE_WORDS = new Set([
+  'ceo', 'cto', 'coo', 'cfo', 'cmo', 'ciso', 'cio', 'vp', 'svp', 'evp',
+  'head', 'chief', 'officer', 'director', 'manager', 'lead', 'president',
+  'founder', 'cofounder', 'co-founder', 'owner', 'partner', 'engineering',
+  'sales', 'marketing', 'product', 'operations', 'technology', 'unknown', 'n/a',
+  'someone', 'contact', 'person', 'decision', 'maker', 'team',
+]);
+
+/**
+ * A model asked to find people will happily answer "the CTO of Globex", or
+ * invent a plausible-sounding individual for a company it knows nothing about.
+ * The first is a description, not a name; the second is worse, because it
+ * reads as a real person and would be written to the database as one.
+ *
+ * So a value is only accepted as a name when it looks like one: two to five
+ * words, each capitalised or a recognised particle, and none of them a job
+ * title. Anything else becomes null and the candidate carries only its title,
+ * which is the honest version of what the model actually knows.
+ */
+export function personName(value) {
+  const name = toStringOrNull(value);
+  if (!name) return null;
+
+  const words = name.trim().split(/\s+/);
+  if (words.length < 2 || words.length > 5) return null;
+
+  for (const word of words) {
+    const bare = word.replace(/[.,]/g, '');
+    if (!bare) return null;
+    if (ROLE_WORDS.has(bare.toLowerCase())) return null;
+    if (NAME_PARTICLES.has(bare.toLowerCase())) continue;
+    // Anything else has to start like a name does.
+    if (!/^\p{Lu}[\p{L}'’-]*$/u.test(bare)) return null;
+  }
+
+  return name;
+}
+
+function coerceDiscovery(raw) {
+  const o = raw ?? {};
+  const rows = toArray(pick(o, 'candidates', 'prospects', 'results', 'companies'));
+
+  const candidates = rows
+    .map((row) => {
+      const c = typeof row === 'object' && row ? row : {};
+      const company = toStringOrNull(pick(c, 'company_name', 'company', 'organization', 'name'));
+      const title = toStringOrNull(pick(c, 'title', 'job_title', 'role', 'position'));
+      if (!company || !title) return null;
+
+      return {
+        company_name: company,
+        company_domain: cleanDomain(pick(c, 'company_domain', 'domain', 'website', 'url')),
+        company_industry: toStringOrNull(pick(c, 'company_industry', 'industry', 'sector')),
+        company_employee_count: toNumberOrNull(
+          pick(c, 'company_employee_count', 'employee_count', 'headcount', 'size')
+        ),
+        company_hq: toStringOrNull(pick(c, 'company_hq', 'hq', 'headquarters', 'location')),
+        title,
+        full_name: personName(pick(c, 'full_name', 'person_name', 'contact_name')),
+        linkedin_url: toStringOrNull(pick(c, 'linkedin_url', 'linkedin', 'profile_url')),
+        why_this_company: toStringOrNull(pick(c, 'why_this_company', 'reason', 'rationale', 'why')),
+        confidence: oneOf(pick(c, 'confidence'), ['high', 'medium', 'low'], 'low'),
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    candidates,
+    search_reasoning: toStringOrNull(pick(o, 'search_reasoning', 'reasoning', 'reason')) ?? '',
+    caveats: toArray(pick(o, 'caveats', 'warnings', 'notes')).map(String),
+  };
+}
+
 /* ── registry ───────────────────────────────────────────────────────── */
 
 export const AGENT_SCHEMAS = {
+  discovery: {
+    schema: discoverySchema,
+    coerce: coerceDiscovery,
+    requiredFields: ['candidates'],
+  },
   icp_fitment: {
     schema: icpSchema,
     coerce: coerceIcp,

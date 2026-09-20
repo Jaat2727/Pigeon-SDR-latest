@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "check": "node scripts/verify.js"
+    "check": "node scripts/verify.js && node scripts/verify-failover.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",

@@ -1006,8 +1006,26 @@ export const LOCAL_ENGINE = {
   followup_timing: localFollowupTiming,
 };
 
+/**
+ * Agents that deliberately have no local implementation, and the reason why.
+ * Discovery is the important one: every other agent transforms something it
+ * was handed, so a rule-based version degrades gracefully. Discovery invents
+ * the input itself, and a deterministic version of that is not a fallback,
+ * it is a fabricated list of companies presented as sourced leads.
+ */
+const NO_LOCAL_ENGINE = {
+  discovery:
+    'Discovery has no offline fallback on purpose. Finding companies requires either Apollo or a ' +
+    'model; a rule-based version would be inventing company names, which is worse than returning ' +
+    'nothing. Add a Groq or Gemini key, or an APOLLO_API_KEY, or import prospects from a CSV.',
+};
+
 export function runLocalEngine(agentName, payload) {
   const fn = LOCAL_ENGINE[agentName];
-  if (!fn) throw new Error(`No local engine implementation for agent "${agentName}"`);
+  if (!fn) {
+    throw new Error(
+      NO_LOCAL_ENGINE[agentName] ?? `No local engine implementation for agent "${agentName}"`
+    );
+  }
   return fn(payload || {});
 }

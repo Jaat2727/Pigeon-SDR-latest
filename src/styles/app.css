@@ -530,3 +530,311 @@ table.data tbody tr.clickable:hover { background: var(--surface-2); }
   .panel-head, .panel-body { padding: 14px; }
   .stats { gap: 16px; }
 }
+
+/* ===========================================================================
+   Jobs, the agent flow, key health, the wizard.
+   Everything below belongs to the screens that were rebuilt around running
+   work: a run you watch rather than wait for, and an agent layer that
+   explains itself.
+   =========================================================================== */
+
+/* ── a running job ──────────────────────────────────────────────────── */
+
+.job-panel {
+  display: grid;
+  gap: 8px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+.job-panel.running   { border-color: var(--accent); background: var(--accent-wash); }
+.job-panel.failed    { border-color: var(--stop);   background: var(--stop-wash); }
+.job-panel.cancelled { border-color: var(--warn);   background: var(--warn-wash); }
+.job-panel.succeeded { border-color: var(--ok);     background: var(--ok-wash); }
+
+.job-bar {
+  position: relative;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.job-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width .35s ease;
+}
+
+/* Before the server knows how many prospects it picked up there is no honest
+   percentage to show, so the bar sweeps instead of sitting at zero. */
+.job-bar.indeterminate > i {
+  width: 38% !important;
+  animation: job-sweep 1.15s ease-in-out infinite;
+}
+@keyframes job-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+
+.job-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+.job-events li {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.job-events li .dot { width: 6px; height: 6px; border-radius: 50%; }
+
+/* ── the agent flow ─────────────────────────────────────────────────── */
+
+.flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.flow-step {
+  position: relative;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+.flow-n {
+  width: 20px; height: 20px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+  font-size: 11px; font-weight: 700;
+  margin-bottom: 7px;
+}
+.flow-name { font-weight: 600; margin-bottom: 7px; }
+.flow-io { font-size: 12.5px; color: var(--ink-2); margin-bottom: 4px; }
+.flow-label {
+  display: inline-block;
+  min-width: 24px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-3);
+}
+.flow-state {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--line);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.flow-aside {
+  padding: 12px 13px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+/* ── key health ─────────────────────────────────────────────────────── */
+
+.key-provider {
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+}
+.key-provider:first-of-type { border-top: 0; }
+
+.key-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.key-chip {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--r);
+  background: var(--surface);
+}
+.key-chip.healthy  { border-left-color: var(--ok); }
+.key-chip.cooling  { border-left-color: var(--warn); background: var(--warn-wash); }
+.key-chip.disabled { border-left-color: var(--stop); background: var(--stop-wash); }
+
+/* ── the request trace ──────────────────────────────────────────────── */
+
+.trace-stage {
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+.trace-stage > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  list-style: none;
+}
+.trace-stage > summary::-webkit-details-marker { display: none; }
+.trace-stage > summary::before {
+  content: '▸';
+  color: var(--ink-3);
+  transition: transform .15s ease;
+}
+.trace-stage[open] > summary::before { transform: rotate(90deg); }
+.trace-stage > summary > :last-child { margin-left: auto; }
+.trace-body { padding: 0 12px 12px; }
+
+.code-block {
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.55;
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── segmented control ──────────────────────────────────────────────── */
+
+.seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+.seg-item {
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.seg-item:hover { color: var(--ink); }
+.seg-item.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+
+/* ── the campaign wizard ────────────────────────────────────────────── */
+
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+}
+.wizard-steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.wizard-steps li.on   { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+.wizard-steps li.done { color: var(--ink-2); }
+.wizard-n {
+  width: 19px; height: 19px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--surface-3);
+  font-size: 11px; font-weight: 700;
+}
+.wizard-steps li.on .wizard-n   { background: var(--accent); color: #0a0d0f; }
+.wizard-steps li.done .wizard-n { background: var(--ok-wash); color: var(--ok); }
+
+.card-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 7px;
+}
+.card-choice {
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.card-choice:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-2); }
+.card-choice.on { border-color: var(--accent); background: var(--accent-wash); }
+.card-choice:disabled { opacity: .5; cursor: not-allowed; }
+.card-choice-title { font-weight: 600; margin-bottom: 2px; }
+
+.review {
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--line);
+}
+.review-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 12px;
+  background: var(--surface);
+}
+
+.tight-list { margin: 6px 0 0; padding-left: 18px; }
+.tight-list li { margin-bottom: 3px; }
+
+/* ── the order of checks ────────────────────────────────────────────── */
+
+.check-order {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+}
+.check-order li {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 11px;
+  align-items: start;
+}
+.check-n {
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.check-title { font-weight: 600; }
+
+/* A panel whose state is itself the alarm: the kill switch when it is on. */
+.panel.alarmed { border-color: var(--stop); background: var(--stop-wash); }
+
+.kv.tight dt, .kv.tight dd { padding: 2px 0; }

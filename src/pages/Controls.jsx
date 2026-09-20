@@ -1,10 +1,14 @@
 /**
- * The stop button, at four levels, plus the suppression list.
+ * Controls: the stop button, at several levels, plus who is off limits.
  *
  * What this screen reports comes from the same gate the pipeline calls before
- * every action, so what it says is stopping work is what is stopping work.
- * A control panel that reads from a different source than the thing it
- * controls is worse than no control panel.
+ * every action, so what it says is stopping work is what is stopping work. A
+ * control panel that reads from a different source than the thing it controls
+ * is worse than no control panel.
+ *
+ * The screen answers three questions in order, because that is the order
+ * someone opening it has them in: is anything running, is anything stopping
+ * it, and how do I stop it myself.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
@@ -17,6 +21,14 @@ import {
 
 const CHANNEL_LABEL = { email: 'Email', linkedin: 'LinkedIn', sms: 'SMS', voice: 'Voice' };
 
+const TYPE_LABEL = {
+  campaign_run: 'pipeline run',
+  discovery: 'finding prospects',
+  prospect_advance: 'advancing one prospect',
+};
+
+/* ── who is off limits ────────────────────────────────────────────────── */
+
 function AddSuppression({ campaigns, onClose, onAdded }) {
   const { actor } = useApp();
   const [form, setForm] = useState({ email: '', domain: '', phone: '', reason: '', scope: 'global', campaignId: '' });
@@ -24,7 +36,7 @@ function AddSuppression({ campaigns, onClose, onAdded }) {
 
   return (
     <Modal
-      title="Add a suppression rule"
+      title="Never contact"
       onClose={onClose}
       footer={
         <>
@@ -43,7 +55,7 @@ function AddSuppression({ campaigns, onClose, onAdded }) {
               }
             }}
           >
-            Add
+            Add the rule
           </ActionButton>
         </>
       }
@@ -52,15 +64,16 @@ function AddSuppression({ campaigns, onClose, onAdded }) {
         {error && <Banner tone="stop">{error}</Banner>}
         <Note>
           Matched with a SQL predicate before any outbound action. A model is never asked to
-          remember who is off limits.
+          remember who is off limits, because a model that forgets one is a model that emails them.
         </Note>
         <div className="field">
-          <label className="label">Email</label>
+          <label className="label">One person, by email</label>
           <input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
         </div>
         <div className="field">
-          <label className="label">Or a whole domain</label>
+          <label className="label">Or a whole company, by domain</label>
           <input className="input" placeholder="competitor.com" value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} />
+          <span className="hint">Blocks everyone at that domain, in every campaign that the scope covers.</span>
         </div>
         <div className="field">
           <label className="label">Or a phone number</label>
@@ -68,7 +81,8 @@ function AddSuppression({ campaigns, onClose, onAdded }) {
         </div>
         <div className="field">
           <label className="label">Why</label>
-          <input className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+          <input className="input" placeholder="Existing customer" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+          <span className="hint">Shown to whoever finds this rule later and wonders about it.</span>
         </div>
         <div className="field">
           <label className="label">Applies to</label>
@@ -91,11 +105,14 @@ function AddSuppression({ campaigns, onClose, onAdded }) {
   );
 }
 
+/* ── the page ─────────────────────────────────────────────────────────── */
+
 export default function Controls() {
   const { actor, campaigns, refresh, setError } = useApp();
   const [controls, setControls] = useState(null);
   const [suppression, setSuppression] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [confirmKill, setConfirmKill] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -110,14 +127,26 @@ export default function Controls() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Running jobs are the fast-moving part of this screen. Without a refresh
+  // the "stop this" button stays on screen for a run that finished a minute
+  // ago, and pressing it produces a confusing error.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') load();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [load]);
+
   const after = async () => { await load(); await refresh(); };
+
+  const running = controls?.running_jobs ?? [];
 
   return (
     <>
       <div className="topbar">
         <div>
           <div className="page-title">Controls</div>
-          <div className="page-sub">Four ways to stop it, and who is off limits</div>
+          <div className="page-sub">What is running, what is stopping it, and how to stop it yourself</div>
         </div>
         <div className="spacer" />
         <button className="btn ghost sm" onClick={load}><Icons.refresh size={14} /></button>
@@ -128,27 +157,71 @@ export default function Controls() {
 
         {!controls ? <Loading label="Loading controls" /> : (
           <>
-            {controls.gate.blockers.length > 0 ? (
-              <Banner tone="warn">
-                <b>Work is currently held.</b>{' '}
-                {controls.gate.blockers.map((b) => b.detail).join('. ')}.
-              </Banner>
-            ) : (
-              <Banner tone="info">
-                Nothing is holding work. {controls.gate.live_campaigns} of{' '}
-                {controls.gate.total_campaigns} campaigns are live.
-              </Banner>
-            )}
+            {/* what is happening right now */}
+            <div className="panel">
+              <div className="panel-head">
+                <h2>Right now</h2>
+                <div className="spacer" />
+                {running.length > 0 && <Pill tone="blue" dot>{running.length} running</Pill>}
+              </div>
+              <div className="panel-body stack-sm">
+                {controls.gate.blockers.length > 0 ? (
+                  <Banner tone="warn">
+                    <b>Work is held.</b> {controls.gate.blockers.map((b) => b.detail).join('. ')}.
+                    Nothing new will start until that changes.
+                  </Banner>
+                ) : (
+                  <Banner tone="info">
+                    Nothing is holding work. {controls.gate.live_campaigns} of{' '}
+                    {controls.gate.total_campaigns} campaigns are live.
+                  </Banner>
+                )}
+
+                {running.length === 0 ? (
+                  <div className="small dim">No job is running. Nothing is being sent or scored this second.</div>
+                ) : (
+                  <table className="data">
+                    <thead>
+                      <tr><th>Campaign</th><th>Doing</th><th>Progress</th><th>Started</th><th /></tr>
+                    </thead>
+                    <tbody>
+                      {running.map((j) => (
+                        <tr key={j.id}>
+                          <td className="cell-main">{j.campaign_name ?? '—'}</td>
+                          <td className="small">{TYPE_LABEL[j.type] ?? j.type}</td>
+                          <td className="small">
+                            {j.total > 0 ? `${j.processed} of ${j.total}` : 'starting'}
+                          </td>
+                          <td className="small muted">
+                            {when(j.started_at ?? j.created_at)}
+                            {j.created_by && <div className="cell-sub">by {j.created_by}</div>}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <ActionButton
+                              className="btn sm"
+                              onClick={async () => { await api.cancelJob(j.id, { actor }); await after(); }}
+                            >
+                              Stop
+                            </ActionButton>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
 
             {/* 1 · everything */}
-            <div className="panel">
+            <div className={`panel ${controls.kill_switch ? 'alarmed' : ''}`}>
               <div className="panel-body">
                 <div className="row">
                   <div>
                     <h2>Stop everything</h2>
                     <div className="small dim" style={{ marginTop: 3 }}>
-                      One switch. No agent runs, no message goes out, in any campaign, until it is
-                      turned off. Checked first, before every other control.
+                      One switch. No agent runs and no message goes out, in any campaign, until it
+                      is turned off. Turning it on also stops anything already in flight: the model
+                      call is aborted rather than left to finish.
                     </div>
                   </div>
                   <div className="spacer" />
@@ -160,7 +233,10 @@ export default function Controls() {
                     danger
                     label="Kill switch"
                     onChange={async (on) => {
-                      await api.setKillSwitch({ enabled: on, actor });
+                      // Turning it off is harmless. Turning it on stops work
+                      // for everyone, so it asks first.
+                      if (on) { setConfirmKill(true); return; }
+                      await api.setKillSwitch({ enabled: false, actor });
                       await after();
                     }}
                   />
@@ -179,6 +255,10 @@ export default function Controls() {
               <div className="panel">
                 <div className="panel-head"><h2>By channel</h2></div>
                 <div className="panel-body">
+                  <div className="small dim" style={{ marginBottom: 6 }}>
+                    Stops anything outbound on that channel, everywhere. Research and scoring carry
+                    on, because knowing who would have qualified costs them nothing.
+                  </div>
                   {controls.channels.map((c) => (
                     <div className="row" key={c.channel} style={{ padding: '7px 0' }}>
                       <span>{CHANNEL_LABEL[c.channel] ?? c.channel}</span>
@@ -197,7 +277,6 @@ export default function Controls() {
                       />
                     </div>
                   ))}
-                  <Note>Applies across every campaign at once. A campaign that only has one channel stops entirely when that channel does.</Note>
                 </div>
               </div>
 
@@ -205,6 +284,10 @@ export default function Controls() {
               <div className="panel">
                 <div className="panel-head"><h2>By agent</h2></div>
                 <div className="panel-body">
+                  <div className="small dim" style={{ marginBottom: 6 }}>
+                    A paused agent stops the pipeline at its step. Prospects wait there rather than
+                    skipping it, so nothing gets sent without having been scored.
+                  </div>
                   {controls.agents.map((a) => (
                     <div className="row" key={a.id} style={{ padding: '7px 0' }}>
                       <span>{a.name}</span>
@@ -223,46 +306,75 @@ export default function Controls() {
                       />
                     </div>
                   ))}
-                  <Note>A paused agent stops the pipeline at its step. Prospects wait there rather than skipping it.</Note>
                 </div>
               </div>
             </div>
 
             {/* 4 · campaign */}
             <div className="panel">
-              <div className="panel-head"><h2>By campaign</h2></div>
+              <div className="panel-head">
+                <h2>By campaign</h2>
+                <div className="spacer" />
+                <span className="tiny muted">pausing also stops that campaign&apos;s running job</span>
+              </div>
               <div className="panel-body tight">
-                <table className="data">
-                  <thead><tr><th>Campaign</th><th>Status</th><th>Channels</th><th /></tr></thead>
-                  <tbody>
-                    {controls.campaigns.map((c) => (
-                      <tr key={c.id}>
-                        <td className="cell-main">{c.name}</td>
-                        <td>
-                          <Pill tone={c.status === 'live' ? 'ok' : c.status === 'paused' ? 'warn' : 'grey'} dot>
-                            {c.status}
-                          </Pill>
-                        </td>
-                        <td>
-                          <div className="row wrap" style={{ gap: 4 }}>
-                            {(c.enabled_channels ?? []).map((ch) => <Pill tone="line" key={ch}>{ch}</Pill>)}
-                          </div>
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <ActionButton
-                            className="btn sm"
-                            onClick={async () => {
-                              await api.updateCampaign(c.id, { status: c.status === 'live' ? 'paused' : 'live' });
-                              await after();
-                            }}
-                          >
-                            {c.status === 'live' ? 'Pause' : 'Set live'}
-                          </ActionButton>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {controls.campaigns.length === 0 ? (
+                  <Empty title="No campaigns yet" sub="Create one from the Campaigns screen." />
+                ) : (
+                  <table className="data">
+                    <thead><tr><th>Campaign</th><th>Status</th><th>Channels</th><th /></tr></thead>
+                    <tbody>
+                      {controls.campaigns.map((c) => {
+                        const busy = running.find((j) => j.campaign_id === c.id);
+                        return (
+                          <tr key={c.id}>
+                            <td className="cell-main">
+                              {c.name}
+                              {busy && <div className="cell-sub">{TYPE_LABEL[busy.type] ?? busy.type} in progress</div>}
+                            </td>
+                            <td>
+                              <Pill tone={c.status === 'live' ? 'ok' : c.status === 'paused' ? 'warn' : 'grey'} dot>
+                                {c.status}
+                              </Pill>
+                            </td>
+                            <td>
+                              <div className="row wrap" style={{ gap: 4 }}>
+                                {(c.enabled_channels ?? []).map((ch) => (
+                                  <Pill tone="line" key={ch}>{CHANNEL_LABEL[ch] ?? ch}</Pill>
+                                ))}
+                              </div>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              {c.status === 'draft' ? (
+                                <span className="tiny muted">set it live from its own page</span>
+                              ) : c.status === 'archived' ? (
+                                <span className="tiny muted">archived</span>
+                              ) : (
+                                <ActionButton
+                                  className="btn sm"
+                                  onClick={async () => {
+                                    try {
+                                      await api.setCampaignPause({
+                                        campaignId: c.id,
+                                        paused: c.status === 'live',
+                                        actor,
+                                      });
+                                      await after();
+                                    } catch (err) {
+                                      setError(friendlyError(err));
+                                    }
+                                  }}
+                                >
+                                  {c.status === 'live' ? 'Pause' : 'Resume'}
+                                </ActionButton>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
 
@@ -307,17 +419,73 @@ export default function Controls() {
               </div>
             </div>
 
-            <Note>
-              Research and scoring still run for a suppressed prospect, because knowing that someone
-              on the list would have qualified is useful and costs them nothing. The stop happens
-              the moment anything outbound begins.
-            </Note>
+            {/* the order of checks */}
+            <div className="panel">
+              <div className="panel-head">
+                <h2>The order these are checked in</h2>
+                <div className="spacer" />
+                <span className="tiny muted">first match wins, and is the reason shown</span>
+              </div>
+              <div className="panel-body">
+                <ol className="check-order">
+                  {controls.check_order.map((c, i) => (
+                    <li key={c.level}>
+                      <span className="check-n">{i + 1}</span>
+                      <div>
+                        <div className="check-title">{c.title}</div>
+                        <div className="tiny muted">{c.scope}</div>
+                        <div className="small dim">{c.detail}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                <Note>
+                  The order changes the explanation, not the outcome. When both the kill switch and
+                  the suppression list would stop something, &quot;the kill switch is on&quot; is
+                  the more useful answer, so the broadest reason is checked first.
+                </Note>
+              </div>
+            </div>
           </>
         )}
       </div>
 
       {adding && (
         <AddSuppression campaigns={campaigns} onClose={() => setAdding(false)} onAdded={load} />
+      )}
+
+      {confirmKill && (
+        <Modal
+          title="Stop everything?"
+          onClose={() => setConfirmKill(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setConfirmKill(false)}>Cancel</button>
+              <ActionButton
+                className="btn danger"
+                onClick={async () => {
+                  await api.setKillSwitch({ enabled: true, actor });
+                  setConfirmKill(false);
+                  await after();
+                }}
+              >
+                Stop everything
+              </ActionButton>
+            </>
+          }
+        >
+          <div className="stack-sm">
+            <p>
+              Every campaign stops. {running.length > 0
+                ? `${running.length} job${running.length === 1 ? '' : 's'} running right now will be cancelled mid-step.`
+                : 'Nothing is running right now, so nothing is interrupted.'}
+            </p>
+            <Note>
+              Prospects keep their state and nothing is lost. Turning the switch back off lets work
+              resume from where each one stopped.
+            </Note>
+          </div>
+        </Modal>
       )}
     </>
   );

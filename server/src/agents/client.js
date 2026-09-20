@@ -6,24 +6,21 @@
  * Background mode (a run acknowledgement, never the actual output) and that
  * is a setting on DronaHQ's side, not something fixable from here. Rather
  * than ship a "DronaHQ integration" that silently produces nothing, the
- * intelligence layer runs on a real model instead: Groq, then Gemini, tried
- * in the order named by `LLM_PROVIDER_ORDER`, with a second Groq key behind
- * the first when `GROQ_API_KEY` holds more than one (comma separated) — the
- * "if one fails, another sends" fallback that was the actual point of using
- * more than one provider.
+ * intelligence layer runs on real models instead: Groq, then Gemini, each
+ * with its own pool of up to six keys.
  *
  * The path is the same every time: LLM engine, then reshape, then validate,
  * then one retry with the validation error handed back to the model; if no
- * provider is configured or all of them fail, the deterministic local
- * engine. Whatever happens, a row lands in `agent_runs` naming the engine
- * that actually produced the output.
+ * provider is configured or all of them fail, the deterministic local engine.
+ * Whatever happens, a row lands in `agent_runs` naming the engine, the
+ * provider, the model and the key that actually produced the output.
  *
  * That last part is the point. A fallback that quietly impersonates a model
  * call is worse than no fallback, because it makes the system look like it is
  * working when it is not. Every run is attributed, the UI badges it, and the
  * agent performance numbers are counted from those rows rather than stored.
  */
-import { callLlm, isLlmEngineConfigured } from './llmEngine.js';
+import { callLlm, isLlmEngineConfigured, buildPrompt, CancelledError } from './llmEngine.js';
 import { runLocalEngine } from './localEngine.js';
 import { AGENT_SCHEMAS, isEmptyOutput } from './schemas.js';
 import { getAgentEngine } from './registry.js';
@@ -77,6 +74,14 @@ async function recordRun(row) {
   try {
     const { data, error } = await supabase.from('agent_runs').insert(row).select('id').single();
     if (error) {
+      // 42703 is an undefined column: the provider/model/key columns come from
+      // a later migration. Rather than lose the run entirely, drop those three
+      // fields and write the row the original schema can hold.
+      if (error.code === '42703') {
+        const { llm_provider, llm_model, llm_key, ...core } = row;
+        const retry = await supabase.from('agent_runs').insert(core).select('id').single();
+        if (!retry.error) return retry.data.id;
+      }
       console.warn(`[agent_runs] could not record a run: ${error.message}`);
       return null;
     }
@@ -96,12 +101,14 @@ async function recordRun(row) {
  * @param {object} [meta.localPayload] the shape the local engine expects, if it differs
  * @param {Array}  [meta.retrievedChunks]
  * @param {string} [meta.coerceContext] extra context for coercion, e.g. the channel
- * @returns {Promise<{success, output, engine, degraded, agentRunId, error, errorCode}>}
+ * @param {AbortSignal} [meta.signal]  cancels an in-flight model call
+ * @returns {Promise<{success, output, engine, degraded, agentRunId, error, cancelled}>}
  */
 export async function callAgent(agentName, payload, meta = {}) {
   const started = Date.now();
   const configuredEngine = getAgentEngine(agentName);
   const chunkIds = (meta.retrievedChunks ?? []).map((c) => c.id).filter(Boolean);
+  const signal = meta.signal;
 
   const base = {
     campaign_id: meta.campaignId ?? null,
@@ -113,20 +120,31 @@ export async function callAgent(agentName, payload, meta = {}) {
 
   const attempts = [];
   let rawResponse = null;
+  let provider = null;
+  let model = null;
+  let key = null;
 
-  // ── LLM engine: Groq, then Gemini (then a second Groq key, if one is set) ─
-  // with one retry that hands the model its own validation error back, the
-  // same shape of second chance a DronaHQ retry used to get.
+  // ── LLM engine ─────────────────────────────────────────────────────────
+  // Groq's keys, then Gemini's, then one retry that hands the model its own
+  // validation error back — the same shape of second chance a DronaHQ retry
+  // used to get.
   if (configuredEngine === 'llm' && isLlmEngineConfigured()) {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (signal?.aborted) {
+        return { success: false, output: null, engine: null, cancelled: true, error: 'Cancelled' };
+      }
+
       try {
         const body =
           attempt === 1
             ? payload
             : { ...payload, _previous_attempt_error: attempts[attempts.length - 1] };
 
-        const llm = await callLlm(agentName, body);
-        rawResponse = { provider: llm.provider, text: llm.raw };
+        const llm = await callLlm(agentName, body, { signal });
+        provider = llm.provider;
+        model = llm.model;
+        key = llm.key;
+        rawResponse = { provider: llm.provider, model: llm.model, key: llm.key, text: llm.raw };
 
         const result = validate(agentName, llm.output, meta.coerceContext);
 
@@ -142,11 +160,17 @@ export async function callAgent(agentName, payload, meta = {}) {
             tokens,
             cost_usd: costOf(tokens),
             latency_ms: Date.now() - started,
+            llm_provider: llm.provider,
+            llm_model: llm.model,
+            llm_key: llm.key,
           });
           return {
             success: true,
             output: result.output,
             engine: 'llm_engine',
+            provider: llm.provider,
+            model: llm.model,
+            key: llm.key,
             degraded: attempt > 1,
             agentRunId,
           };
@@ -154,6 +178,9 @@ export async function callAgent(agentName, payload, meta = {}) {
 
         attempts.push(result.reason);
       } catch (err) {
+        if (err instanceof CancelledError) {
+          return { success: false, output: null, engine: null, cancelled: true, error: 'Cancelled' };
+        }
         attempts.push(err.message);
       }
     }
@@ -186,6 +213,9 @@ export async function callAgent(agentName, payload, meta = {}) {
         tokens,
         cost_usd: engine === 'our_engine' ? 0 : costOf(tokens),
         latency_ms: Date.now() - started,
+        llm_provider: provider,
+        llm_model: model,
+        llm_key: key,
       });
 
       return {
@@ -210,25 +240,39 @@ export async function callAgent(agentName, payload, meta = {}) {
     raw_response: rawResponse,
     error,
     latency_ms: Date.now() - started,
+    llm_provider: provider,
+    llm_model: model,
+    llm_key: key,
   });
 
   return { success: false, output: null, engine: null, degraded: true, error, agentRunId };
 }
 
 /**
- * Fires one real call at the LLM engine and reports exactly what came back.
- * Writes nothing to the database, so it can be run from the Agents screen as
- * often as needed while checking a key or a prompt.
+ * Fires one real call at the LLM engine and reports every stage of what
+ * happened: the prompt that was sent, which key and model answered, the raw
+ * text, the reshaped object, and the validated result. Writes nothing to the
+ * database, so it can be run from the Agents screen as often as needed while
+ * checking a key or a prompt.
  */
 export async function probeAgent(agentName, payload) {
   const started = Date.now();
+
+  let prompt = null;
+  try {
+    prompt = buildPrompt(agentName, payload);
+  } catch {
+    prompt = null;
+  }
 
   if (!isLlmEngineConfigured()) {
     return {
       reachable: false,
       valid: false,
       error_code: 'not_configured',
-      error: 'No LLM provider is configured. Set GROQ_API_KEY and/or GEMINI_API_KEY.',
+      error:
+        'No LLM provider is configured. Set GROQ_API_KEY and/or GEMINI_API_KEY (up to six of each).',
+      prompt,
       latency_ms: 0,
     };
   }
@@ -241,8 +285,14 @@ export async function probeAgent(agentName, payload) {
       reachable: true,
       valid: result.valid,
       provider: llm.provider,
+      model: llm.model,
+      key: llm.key,
+      attempts: llm.attempts,
+      prompt,
       latency_ms: Date.now() - started,
+      call_latency_ms: llm.latency_ms,
       raw_response: llm.raw,
+      parsed_output: llm.output,
       coerced_output: result.coerced,
       validated_output: result.valid ? result.output : null,
       error: result.valid ? null : result.reason,
@@ -253,6 +303,8 @@ export async function probeAgent(agentName, payload) {
     return {
       reachable: false,
       valid: false,
+      prompt,
+      attempts: Array.isArray(err.raw) ? err.raw : undefined,
       latency_ms: Date.now() - started,
       error: err.message,
       error_code: err.code ?? 'unknown',

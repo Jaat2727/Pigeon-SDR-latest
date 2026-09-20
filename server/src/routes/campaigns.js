@@ -1,14 +1,23 @@
 /**
- * Campaigns: targeting, policy, prompts, and the Run button.
+ * Campaigns: targeting, policy, prompts, lifecycle, and the two buttons that
+ * make something happen — Discover and Run.
+ *
+ * Both of those return a job id rather than a result. Neither one finishes
+ * inside an HTTP request: discovery is a provider search plus a write per
+ * person, and a run is four agent calls per prospect. The response says "this
+ * started, here is how to watch it", and the UI polls /jobs/:id.
  */
 import express from 'express';
 import { supabase, unwrapSoft } from '../db/client.js';
 import { asyncHandler, notFound, badRequest, intParam } from '../lib/http.js';
 import { mapCampaign } from '../services/mappers.js';
 import { computeFunnel } from '../services/metrics.js';
-import { runCampaign } from '../orchestrator/index.js';
+import { startJob, cancelJobsForCampaign, listJobs } from '../orchestrator/jobs.js';
 import { logActivity } from '../services/activity.js';
 import { isAgent } from '../agents/registry.js';
+import { chooseSource } from '../services/discovery/index.js';
+import { searchPeople, buildSearchFilters, isApolloConfigured } from '../services/discovery/apollo.js';
+import { discoveryRouting, env } from '../config.js';
 
 const router = express.Router();
 
@@ -21,10 +30,23 @@ const WRITABLE = new Set([
   'name', 'status', 'objective', 'icp_criteria', 'exclusion_criteria',
   'target_roles', 'industry', 'company_size', 'enabled_channels',
   'outreach_policy', 'messaging_policy', 'research_focus', 'working_hours',
-  'daily_send_limit', 'require_approval', 'rep_id',
+  'daily_send_limit', 'require_approval', 'rep_id', 'sample_profiles',
 ]);
 
 const CHANNELS = ['email', 'linkedin', 'sms', 'voice'];
+const STATUSES = ['draft', 'live', 'paused', 'archived'];
+
+/**
+ * Which status changes are allowed, and from where. Without this an archived
+ * campaign can be set live again by a stale browser tab, and a draft can jump
+ * straight to paused, which means nothing.
+ */
+const TRANSITIONS = {
+  draft: ['live', 'archived'],
+  live: ['paused', 'archived'],
+  paused: ['live', 'archived'],
+  archived: ['draft'],
+};
 
 function cleanPatch(body) {
   const patch = {};
@@ -32,8 +54,8 @@ function cleanPatch(body) {
     if (WRITABLE.has(key)) patch[key] = value;
   }
 
-  if (patch.status && !['draft', 'live', 'paused', 'archived'].includes(patch.status)) {
-    throw badRequest(`status must be draft, live, paused or archived`);
+  if (patch.status && !STATUSES.includes(patch.status)) {
+    throw badRequest('status must be draft, live, paused or archived');
   }
 
   if (patch.enabled_channels) {
@@ -44,7 +66,50 @@ function cleanPatch(body) {
     patch.enabled_channels = list;
   }
 
+  if (patch.target_roles && !Array.isArray(patch.target_roles)) {
+    patch.target_roles = String(patch.target_roles).split(',').map((s) => s.trim()).filter(Boolean);
+  }
+
   return patch;
+}
+
+/**
+ * What is missing before this campaign can do anything useful. Returned with
+ * every campaign so the UI can show it rather than letting someone set a
+ * campaign live with no ICP and then wonder why every prospect comes back
+ * "needs review".
+ */
+export function readiness(campaign) {
+  const blockers = [];
+  const warnings = [];
+
+  if (!campaign.icp_criteria?.trim()) {
+    blockers.push({
+      field: 'icp_criteria',
+      message: 'No ICP. The scoring agent has nothing to score against, so everything comes back needs_review.',
+    });
+  }
+  if (!Array.isArray(campaign.enabled_channels) || campaign.enabled_channels.length === 0) {
+    blockers.push({ field: 'enabled_channels', message: 'No channel is enabled, so no message can be planned.' });
+  }
+
+  if (!campaign.objective?.trim()) {
+    warnings.push({ field: 'objective', message: 'No objective. Messages will be generic.' });
+  }
+  if (!Array.isArray(campaign.target_roles) || campaign.target_roles.length === 0) {
+    warnings.push({ field: 'target_roles', message: 'No target roles, so discovery has no job title to search for.' });
+  }
+  if (!campaign.exclusion_criteria?.trim()) {
+    warnings.push({ field: 'exclusion_criteria', message: 'No exclusions. Nothing will be rejected on principle.' });
+  }
+  if (!campaign.messaging_policy?.trim()) {
+    warnings.push({ field: 'messaging_policy', message: 'No messaging policy, so length and tone are the model’s choice.' });
+  }
+  if (!campaign.rep_id) {
+    warnings.push({ field: 'rep_id', message: 'No rep assigned, so messages are signed "Sales team".' });
+  }
+
+  return { ready: blockers.length === 0, blockers, warnings };
 }
 
 /** GET /campaigns — the list, each with its own counts. */
@@ -55,15 +120,17 @@ router.get('/', asyncHandler(async (req, res) => {
     'campaigns'
   );
 
-  const members = unwrapSoft(
-    await supabase.from('campaign_prospects').select('campaign_id, state'),
-    [],
-    'campaign_prospects'
-  );
+  const [members, running] = await Promise.all([
+    supabase.from('campaign_prospects').select('campaign_id, state'),
+    listJobs({ status: 'queued,running', limit: 50 }),
+  ]);
+
+  const rows = unwrapSoft(members, [], 'campaign_prospects');
+  const busy = new Map(running.map((j) => [j.campaign_id, { id: j.id, type: j.type, status: j.status }]));
 
   res.json(
     campaigns.map((c) => {
-      const mine = members.filter((m) => m.campaign_id === c.id);
+      const mine = rows.filter((m) => m.campaign_id === c.id);
       return mapCampaign(c, {
         prospect_count: mine.length,
         qualified_count: mine.filter((m) =>
@@ -75,6 +142,9 @@ router.get('/', asyncHandler(async (req, res) => {
         replied_count: mine.filter((m) => ['engaged', 'meeting', 'opportunity'].includes(m.state)).length,
         meetings_count: mine.filter((m) => ['meeting', 'opportunity'].includes(m.state)).length,
         pending_count: mine.filter((m) => ['discovered', 'researched', 'qualified', 'strategy_planned'].includes(m.state)).length,
+        readiness: readiness(c),
+        running_job: busy.get(c.id) ?? null,
+        allowed_transitions: TRANSITIONS[c.status] ?? [],
       });
     })
   );
@@ -89,7 +159,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   );
   if (!campaign) throw notFound('No such campaign');
 
-  const [funnel, prompts] = await Promise.all([
+  const [funnel, prompts, jobs] = await Promise.all([
     computeFunnel(req.params.id),
     supabase
       .from('prompt_versions')
@@ -97,12 +167,21 @@ router.get('/:id', asyncHandler(async (req, res) => {
       .eq('campaign_id', req.params.id)
       .order('agent_name')
       .order('version', { ascending: false }),
+    listJobs({ campaignId: req.params.id, limit: 8 }),
   ]);
 
   res.json(
     mapCampaign(campaign, {
       funnel,
       prompts: unwrapSoft(prompts, [], 'prompt_versions'),
+      readiness: readiness(campaign),
+      allowed_transitions: TRANSITIONS[campaign.status] ?? [],
+      running_job: jobs.find((j) => ['queued', 'running'].includes(j.status)) ?? null,
+      recent_jobs: jobs.map((j) => ({
+        id: j.id, type: j.type, status: j.status, processed: j.processed,
+        total: j.total, created_at: j.created_at,
+      })),
+      discovery: discoveryRouting(),
     })
   );
 }));
@@ -110,7 +189,11 @@ router.get('/:id', asyncHandler(async (req, res) => {
 /** POST /campaigns */
 router.post('/', asyncHandler(async (req, res) => {
   const patch = cleanPatch(req.body);
-  if (!patch.name) throw badRequest('A campaign needs a name');
+  if (!patch.name?.trim()) throw badRequest('A campaign needs a name');
+
+  // A campaign always begins in draft. Letting the create call set it live
+  // would skip the one review step the lifecycle exists to enforce.
+  patch.status = 'draft';
 
   const { data, error } = await supabase.from('campaigns').insert(patch).select('*, reps(*)').single();
   if (error) throw new Error(`campaign insert: ${error.message}`);
@@ -123,7 +206,7 @@ router.post('/', asyncHandler(async (req, res) => {
     status: 'success',
   });
 
-  res.status(201).json(mapCampaign(data));
+  res.status(201).json(mapCampaign(data, { readiness: readiness(data) }));
 }));
 
 /** PATCH /campaigns/:id */
@@ -132,11 +215,31 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (Object.keys(patch).length === 0) throw badRequest('Nothing to update');
 
   const before = unwrapSoft(
-    await supabase.from('campaigns').select('status, name').eq('id', req.params.id).maybeSingle(),
+    await supabase.from('campaigns').select('*').eq('id', req.params.id).maybeSingle(),
     null,
     'campaigns'
   );
   if (!before) throw notFound('No such campaign');
+
+  if (patch.status && patch.status !== before.status) {
+    const allowed = TRANSITIONS[before.status] ?? [];
+    if (!allowed.includes(patch.status)) {
+      throw badRequest(
+        `A ${before.status} campaign cannot go straight to ${patch.status}. ` +
+          `From ${before.status} you can go to: ${allowed.join(', ') || 'nowhere'}.`
+      );
+    }
+
+    if (patch.status === 'live') {
+      const check = readiness({ ...before, ...patch });
+      if (!check.ready) {
+        throw badRequest(
+          `Not ready to go live. ${check.blockers.map((b) => b.message).join(' ')}`,
+          { details: check.blockers }
+        );
+      }
+    }
+  }
 
   const { data, error } = await supabase
     .from('campaigns')
@@ -146,28 +249,43 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     .single();
   if (error) throw new Error(`campaign update: ${error.message}`);
 
+  let cancelled = 0;
   if (patch.status && patch.status !== before.status) {
+    // Pausing a campaign whose run is mid-flight has to stop that run too.
+    // Otherwise "paused" means "paused after it finishes the next ten
+    // minutes of work", which is not what anyone pressing pause means.
+    if (['paused', 'archived', 'draft'].includes(patch.status)) {
+      cancelled = await cancelJobsForCampaign(req.params.id, req.body?.actor || 'operator');
+    }
+
     await logActivity({
       campaignId: data.id,
       agentName: 'system',
       action: patch.status === 'live' ? 'Set a campaign live' : `Set a campaign to ${patch.status}`,
-      detail: `${data.name}: ${before.status} to ${patch.status}`,
+      detail:
+        `${data.name}: ${before.status} to ${patch.status}` +
+        (cancelled ? `, stopping ${cancelled} job${cancelled === 1 ? '' : 's'} in progress` : ''),
       status: 'success',
     });
   }
 
-  res.json(mapCampaign(data));
+  res.json(
+    mapCampaign(data, {
+      readiness: readiness(data),
+      allowed_transitions: TRANSITIONS[data.status] ?? [],
+      cancelled_jobs: cancelled,
+    })
+  );
 }));
 
 /**
  * POST /campaigns/:id/run
  *
- * Picks up prospects with something to do and advances each of them. This is
- * the button that makes history: every step it takes writes real rows.
+ * Starts a job and returns its id. 202, because the work has been accepted
+ * and has not happened yet, and saying 200 would be claiming otherwise.
  */
 router.post('/:id/run', asyncHandler(async (req, res) => {
   const limit = intParam(req.body?.limit, 5, { max: 25 });
-  const force = req.body?.force === true;
 
   const campaign = unwrapSoft(
     await supabase.from('campaigns').select('id, name, status').eq('id', req.params.id).maybeSingle(),
@@ -183,8 +301,98 @@ router.post('/:id/run', asyncHandler(async (req, res) => {
     });
   }
 
-  const result = await runCampaign(req.params.id, { limit, force });
-  res.json(result);
+  const job = await startJob({
+    type: 'campaign_run',
+    campaignId: req.params.id,
+    params: {
+      limit,
+      force: req.body?.force === true,
+      prospect_ids: Array.isArray(req.body?.prospect_ids) ? req.body.prospect_ids : null,
+    },
+    actor: req.body?.actor || 'operator',
+  });
+
+  res.status(202).json({ job_id: job.id, status: job.status, watch: `/jobs/${job.id}` });
+}));
+
+/**
+ * POST /campaigns/:id/discover
+ *
+ * Finds people and puts them in the campaign. Allowed while a campaign is in
+ * draft: filling a campaign with prospects sends nothing, and making someone
+ * set it live before they can even see who they would be contacting gets the
+ * review step backwards.
+ */
+router.post('/:id/discover', asyncHandler(async (req, res) => {
+  const campaign = unwrapSoft(
+    await supabase.from('campaigns').select('*').eq('id', req.params.id).maybeSingle(),
+    null,
+    'campaigns'
+  );
+  if (!campaign) throw notFound('No such campaign');
+  if (campaign.status === 'archived') throw badRequest('That campaign is archived.');
+
+  const source = chooseSource(req.body?.source ?? null);
+  if (source === 'none') {
+    throw badRequest(
+      'No discovery source is configured. Set APOLLO_API_KEY for a real search, or a Groq or ' +
+        'Gemini key for model suggestions, or import a CSV instead.'
+    );
+  }
+
+  const job = await startJob({
+    type: 'discovery',
+    campaignId: req.params.id,
+    params: {
+      count: intParam(req.body?.count, 10, { max: env.DISCOVERY_MAX_PER_RUN }),
+      source,
+      filters: req.body?.filters ?? {},
+    },
+    actor: req.body?.actor || 'operator',
+  });
+
+  res.status(202).json({ job_id: job.id, source, status: job.status, watch: `/jobs/${job.id}` });
+}));
+
+/**
+ * POST /campaigns/:id/discover/preview
+ *
+ * Runs the Apollo search and shows what it found without writing anything.
+ * Worth its own endpoint: seeing the list before it lands in the campaign is
+ * how an operator finds out their headcount band was wrong, and undoing an
+ * import is much more annoying than not doing it.
+ */
+router.post('/:id/discover/preview', asyncHandler(async (req, res) => {
+  const campaign = unwrapSoft(
+    await supabase.from('campaigns').select('*').eq('id', req.params.id).maybeSingle(),
+    null,
+    'campaigns'
+  );
+  if (!campaign) throw notFound('No such campaign');
+
+  if (!isApolloConfigured()) {
+    return res.json({
+      previewable: false,
+      reason:
+        'Preview needs Apollo. Model suggestions cannot be previewed without generating them, ' +
+        'which costs the same call as running discovery, so run it and review the prospects after.',
+      filters: buildSearchFilters(campaign, req.body?.filters ?? {}),
+    });
+  }
+
+  const search = await searchPeople(campaign, {
+    ...(req.body?.filters ?? {}),
+    per_page: intParam(req.body?.count, 10, { max: 25 }),
+  });
+
+  res.json({
+    previewable: true,
+    filters: search.filters,
+    total_matches: search.pagination.total_entries,
+    showing: search.candidates.length,
+    candidates: search.candidates,
+    emails_locked: search.candidates.filter((c) => !c.email).length,
+  });
 }));
 
 /**
@@ -260,7 +468,13 @@ router.post('/:id/duplicate', asyncHandler(async (req, res) => {
     status: 'success',
   });
 
-  res.status(201).json(mapCampaign(data, { prospect_count: 0, qualified_count: 0, contacted_count: 0, replied_count: 0, meetings_count: 0, pending_count: 0 }));
+  res.status(201).json(
+    mapCampaign(data, {
+      prospect_count: 0, qualified_count: 0, contacted_count: 0,
+      replied_count: 0, meetings_count: 0, pending_count: 0,
+      readiness: readiness(data),
+    })
+  );
 }));
 
 /** GET /campaigns/:id/prompts — active prompt per agent. */

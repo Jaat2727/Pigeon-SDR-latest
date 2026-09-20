@@ -9,6 +9,8 @@ import express from 'express';
 import { supabase, dbReady } from '../db/client.js';
 import { asyncHandler } from '../lib/http.js';
 import { configReport } from '../config.js';
+import { keyHealth } from '../agents/keyPool.js';
+import { pingApollo, isApolloConfigured } from '../services/discovery/apollo.js';
 
 const router = express.Router();
 
@@ -16,6 +18,9 @@ const EXPECTED_TABLES = [
   'reps', 'campaigns', 'prospects', 'campaign_prospects', 'agent_runs',
   'messages', 'activities', 'approvals', 'knowledge_chunks',
   'suppression_list', 'prompt_versions', 'system_control',
+  // From db/04-runtime.sql. Absent means jobs cannot be recorded, which the
+  // schema check names specifically rather than leaving as a 500 on first run.
+  'job_runs',
 ];
 
 router.get('/', asyncHandler(async (req, res) => {
@@ -48,7 +53,28 @@ router.get('/', asyncHandler(async (req, res) => {
     database: 'connected',
     db_latency_ms: Date.now() - started,
     uptime_s: Math.round(process.uptime()),
+    keys: keyHealth(),
     config,
+  });
+}));
+
+/**
+ * GET /health/providers
+ *
+ * Proves the outbound side works: which keys this process holds and what
+ * state each is in, plus a one-record Apollo search that spends no credits.
+ * Separate from /health because it makes a real network call, and a liveness
+ * check that depends on a third party is not a liveness check.
+ */
+router.get('/providers', asyncHandler(async (req, res) => {
+  const apollo = req.query.probe === 'false' || !isApolloConfigured()
+    ? { configured: isApolloConfigured() }
+    : await pingApollo();
+
+  res.json({
+    llm: keyHealth(),
+    apollo,
+    discovery: configReport().discovery,
   });
 }));
 
@@ -76,8 +102,10 @@ router.get('/schema', asyncHandler(async (req, res) => {
     missing,
     tables: results,
     message: missing.length
-      ? `Run server/db/01-schema.sql in the Supabase SQL editor. Missing: ${missing.join(', ')}.`
-      : 'All twelve tables are present.',
+      ? missing.length === 1 && missing[0] === 'job_runs'
+        ? 'Run server/db/04-runtime.sql in the Supabase SQL editor. Everything else is present, but runs cannot be recorded without job_runs.'
+        : `Run server/db/01-schema.sql, then 04-runtime.sql, in the Supabase SQL editor. Missing: ${missing.join(', ')}.`
+      : `All ${EXPECTED_TABLES.length} tables are present.`,
   });
 }));
 

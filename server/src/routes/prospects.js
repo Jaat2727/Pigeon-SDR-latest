@@ -6,8 +6,10 @@ import express from 'express';
 import { supabase, unwrapSoft } from '../db/client.js';
 import { asyncHandler, notFound, badRequest, intParam } from '../lib/http.js';
 import { mapProspectRow, mapProspectDetail } from '../services/mappers.js';
-import { advance, advanceUntilBlocked, handleReply } from '../orchestrator/index.js';
+import { advance, handleReply } from '../orchestrator/index.js';
 import { logActivity } from '../services/activity.js';
+import { startJob, acquireLock, releaseLock } from '../orchestrator/jobs.js';
+import { addCandidate } from '../services/discovery/index.js';
 
 const router = express.Router();
 
@@ -90,17 +92,130 @@ router.get('/:id', asyncHandler(async (req, res) => {
   );
 }));
 
-/** POST /prospects/:id/advance — one step, or as far as it will go. */
+/**
+ * POST /prospects/:id/advance — one step, or as far as it will go.
+ *
+ * One step is a single agent call, which finishes inside a request, so it
+ * answers with the result. "As far as it will go" is up to four of them and
+ * does not, so it answers with a job id and the UI watches that instead. Two
+ * shapes from one endpoint is a little awkward; the alternative was a button
+ * that sometimes silently timed out, which is worse.
+ */
 router.post('/:id/advance', asyncHandler(async (req, res) => {
   const campaignId = req.body?.campaignId;
   if (!campaignId) throw badRequest('campaignId is required: a prospect advances inside one campaign');
 
-  const result =
-    req.body?.all === true
-      ? await advanceUntilBlocked(campaignId, req.params.id, { force: req.body?.force === true })
-      : [await advance(campaignId, req.params.id, { force: req.body?.force === true })];
+  const force = req.body?.force === true;
 
-  res.json({ steps: result, final: result[result.length - 1] });
+  if (req.body?.all === true) {
+    const job = await startJob({
+      type: 'prospect_advance',
+      campaignId,
+      params: { prospect_id: req.params.id, all: true, force },
+      actor: req.body?.actor || 'operator',
+    });
+    return res.status(202).json({ job_id: job.id, status: job.status, watch: `/jobs/${job.id}` });
+  }
+
+  // Even one step takes a lock. The background worker may be looking at the
+  // same prospect right now, and two processes advancing the same row means
+  // it takes two steps at once and the timeline no longer explains itself.
+  const got = await acquireLock(campaignId, req.params.id, 'manual-advance');
+  if (!got) {
+    throw badRequest('That prospect is being worked on right now. Wait a moment and try again.');
+  }
+
+  try {
+    const step = await advance(campaignId, req.params.id, { force });
+    res.json({ steps: [step], final: step });
+  } finally {
+    await releaseLock(campaignId, req.params.id);
+  }
+}));
+
+/**
+ * POST /prospects/import — many at once, from a paste or a CSV.
+ *
+ * The honest alternative to a discovery source: a list someone already has.
+ * Goes through the same dedupe and the same provenance recording as a
+ * discovered prospect, so an imported record and a searched one are
+ * distinguishable on the prospect page rather than merged into one anonymous
+ * pile.
+ */
+router.post('/import', asyncHandler(async (req, res) => {
+  const { campaignId, rows, actor = 'operator' } = req.body ?? {};
+  if (!campaignId) throw badRequest('campaignId is required');
+  if (!Array.isArray(rows) || rows.length === 0) throw badRequest('Nothing to import');
+  if (rows.length > 200) throw badRequest('Import at most 200 rows at a time');
+
+  const campaign = unwrapSoft(
+    await supabase.from('campaigns').select('id, name').eq('id', campaignId).maybeSingle(),
+    null,
+    'campaigns'
+  );
+  if (!campaign) throw notFound('No such campaign');
+
+  const summary = { added: 0, linked: 0, already_here: 0, failed: 0 };
+  const results = [];
+
+  for (const raw of rows) {
+    const candidate = {
+      first_name: raw.first_name ?? null,
+      last_name: raw.last_name ?? null,
+      full_name: raw.full_name ?? raw.name ?? null,
+      title: raw.title ?? null,
+      email: raw.email?.trim().toLowerCase() || null,
+      phone: raw.phone ?? null,
+      linkedin_url: raw.linkedin_url ?? raw.linkedin ?? null,
+      company_name: raw.company_name ?? raw.company ?? null,
+      company_domain:
+        (raw.company_domain ?? raw.domain ?? '')
+          .toString()
+          .trim()
+          .toLowerCase()
+          .replace(/^https?:\/\//, '')
+          .replace(/^www\./, '')
+          .split(/[/?#]/)[0] || null,
+      company_industry: raw.company_industry ?? raw.industry ?? null,
+      company_employee_count: Number.isFinite(Number(raw.company_employee_count))
+        ? Number(raw.company_employee_count)
+        : null,
+      company_hq: raw.company_hq ?? raw.location ?? null,
+    };
+
+    // A row with no way to identify a person is not a prospect, it is noise.
+    // Importing it would create an unreachable record that still gets
+    // researched and scored, spending model calls on nothing.
+    if (!candidate.email && !candidate.linkedin_url && !(candidate.full_name && candidate.company_name)) {
+      summary.failed += 1;
+      results.push({
+        outcome: 'failed',
+        name: candidate.company_name ?? 'row',
+        detail: 'Needs an email, a LinkedIn URL, or both a name and a company.',
+      });
+      continue;
+    }
+
+    try {
+      const outcome = await addCandidate(candidate, campaignId, { source: 'csv', note: raw.notes ?? null });
+      summary[outcome.outcome] += 1;
+      results.push(outcome);
+    } catch (err) {
+      summary.failed += 1;
+      results.push({ outcome: 'failed', name: candidate.full_name ?? candidate.company_name, detail: err.message });
+    }
+  }
+
+  await logActivity({
+    campaignId,
+    agentName: 'system',
+    action: 'Imported prospects',
+    detail: `${actor} imported ${rows.length} row(s): ${summary.added} added, ${summary.linked} already known, ${summary.failed} rejected.`,
+    status: summary.failed ? 'degraded' : 'success',
+    metadata: summary,
+  });
+
+  res.status(201).json({ ...summary, total: rows.length, results });
 }));
 
 /**
