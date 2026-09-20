@@ -13,6 +13,8 @@ import { supabase, unwrapSoft } from '../db/client.js';
 import { callAgent } from '../agents/client.js';
 import { isActionAllowed } from './gate.js';
 import { retrieveForStep } from '../services/knowledge.js';
+import { sendEmail } from '../services/mailer.js';
+import { isMailerConfigured } from '../config.js';
 import {
   logActivity,
   raiseApproval,
@@ -796,6 +798,43 @@ export async function sendApprovedMessage(messageId, actor = 'operator') {
     };
   }
 
+  // Real delivery, email only. LinkedIn, SMS and voice have no provider wired
+  // and stay simulated — the thread says which one it was either way.
+  let delivery = { simulated: true };
+  if (message.channel === 'email' && isMailerConfigured()) {
+    const { campaign, prospect } = await loadContext(message.campaign_id, message.prospect_id);
+    const display = prospect ? displayOf(prospect) : { name: null };
+    const rep = campaign?.reps ?? null;
+
+    delivery = await sendEmail({
+      to: prospect?.email ?? null,
+      subject: message.subject,
+      body: message.body,
+      fromName: rep?.full_name ?? campaign?.name ?? 'Pigeon',
+      replyTo: rep?.email ?? undefined,
+    });
+    delivery.simulated = false;
+
+    if (!delivery.sent) {
+      await supabase
+        .from('messages')
+        .update({ status: 'failed' })
+        .eq('id', messageId);
+
+      await logActivity({
+        campaignId: message.campaign_id,
+        prospectId: message.prospect_id,
+        agentName: 'system',
+        action: 'Send failed',
+        detail: `${actor} approved this for ${display.name ?? 'this prospect'}, but sending it failed: ${delivery.error}`,
+        status: 'failed',
+        metadata: { message_id: messageId, channel: message.channel },
+      });
+
+      return { sent: false, reason: `Approved, but the send itself failed: ${delivery.error}` };
+    }
+  }
+
   await supabase
     .from('messages')
     .update({ status: 'sent', sent_at: new Date().toISOString() })
@@ -828,12 +867,23 @@ export async function sendApprovedMessage(messageId, actor = 'operator') {
     prospectId: message.prospect_id,
     agentName: 'system',
     action: 'Sent a message',
-    detail: `Approved by ${actor} and sent on ${message.channel}.`,
+    detail: delivery.simulated
+      ? `Approved by ${actor} and sent on ${message.channel}.`
+      : delivery.sandboxed
+        ? `Approved by ${actor} and delivered by email — sandboxed to ${delivery.actually_sent_to} ` +
+          `(would have gone to ${delivery.intended_for}).`
+        : `Approved by ${actor} and delivered by email.`,
     status: 'success',
-    metadata: { message_id: messageId, channel: message.channel, simulated_delivery: true },
+    metadata: {
+      message_id: messageId,
+      channel: message.channel,
+      simulated_delivery: delivery.simulated,
+      ...(delivery.message_id ? { smtp_message_id: delivery.message_id } : {}),
+      ...(delivery.sandboxed ? { sandboxed: true, intended_for: delivery.intended_for } : {}),
+    },
   });
 
-  return { sent: true };
+  return { sent: true, simulated: delivery.simulated, sandboxed: delivery.sandboxed ?? false };
 }
 
 /**

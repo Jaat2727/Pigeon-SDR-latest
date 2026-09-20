@@ -105,6 +105,90 @@ function AddSuppression({ campaigns, onClose, onAdded }) {
   );
 }
 
+/* ── delivery ──────────────────────────────────────────────────────────── */
+
+function MailerPanel({ mailer, actor }) {
+  const [to, setTo] = useState('');
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const test = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await api.testMailer({ to: to.trim() || undefined, actor }));
+    } catch (err) {
+      setResult({ ok: false, error: friendlyError(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Delivery</h2>
+        <div className="spacer" />
+        {mailer?.configured && mailer?.sandbox_to && <Pill tone="warn" dot>sandboxed</Pill>}
+        <Pill tone={mailer?.configured ? 'ok' : 'grey'} dot>
+          {mailer?.configured ? 'email is live' : 'email is simulated'}
+        </Pill>
+      </div>
+      <div className="panel-body stack-sm">
+        {mailer?.configured && mailer?.sandbox_to && (
+          <Banner tone="warn">
+            <b>Sandbox mode is on.</b> Every approved email — for every prospect, in every campaign —
+            is being redirected to <span className="mono">{mailer.sandbox_to}</span> instead of the
+            real address, so the real one is never touched even by mistake. Each sandboxed email says
+            who it would really have gone to, in its subject line. Remove{' '}
+            <code className="mono">SMTP_SANDBOX_TO</code> from the API environment before anything
+            meant to reach real prospects goes out.
+          </Banner>
+        )}
+
+        {mailer?.configured ? (
+          <div className="small dim">
+            Sending from <span className="mono">{mailer.from}</span> via <span className="mono">{mailer.host}</span>.
+            An approved email is actually delivered, not just recorded as sent. LinkedIn, SMS and
+            voice have no provider wired, so those stay simulated regardless.
+          </div>
+        ) : (
+          <Banner tone="warn">
+            <b>No SMTP account is configured.</b> An approved email is recorded as sent but nothing
+            leaves. Set <code className="mono">SMTP_HOST</code>, <code className="mono">SMTP_USER</code>{' '}
+            and <code className="mono">SMTP_PASS</code> in the API environment to turn this on.
+          </Banner>
+        )}
+
+        {mailer?.configured && (
+          <div className="row" style={{ gap: 8 }}>
+            <input
+              className="input"
+              placeholder="you@your-other-address.com — leave blank to just check the credentials"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <ActionButton className="btn sm" onClick={test} disabled={busy}>
+              {busy ? <span className="spin" /> : <Icons.send size={12} />}
+              {to.trim() ? 'Send a test email' : 'Check credentials'}
+            </ActionButton>
+          </div>
+        )}
+
+        {result && (
+          <Banner tone={result.sent || (result.ok && !to.trim()) ? 'info' : 'stop'}>
+            {result.sent === true && `Sent. Check ${result.to} — including spam, the first time.`}
+            {result.sent === false && `Sending failed: ${result.error}`}
+            {result.sent === null && result.ok && (result.note ?? 'Credentials check out.')}
+            {result.sent === null && !result.ok && (result.error ?? 'Could not verify the SMTP credentials.')}
+          </Banner>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── the page ─────────────────────────────────────────────────────────── */
 
 export default function Controls() {
@@ -211,6 +295,8 @@ export default function Controls() {
                 )}
               </div>
             </div>
+
+            <MailerPanel mailer={controls.mailer} actor={actor} />
 
             {/* 1 · everything */}
             <div className={`panel ${controls.kill_switch ? 'alarmed' : ''}`}>

@@ -308,7 +308,7 @@ export default function Queue() {
                     ))}
                   </div>
                 </div>
-                <div className="panel-body tight">
+                <div className={shown.length === 0 ? 'panel-body' : 'q-list'}>
                   {shown.length === 0 ? (
                     <Empty
                       title={approvals.length === 0 ? 'Nothing is waiting on you' : 'Nothing of that kind'}

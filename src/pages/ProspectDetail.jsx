@@ -203,7 +203,7 @@ export default function ProspectDetail() {
             <div className="spacer" />
             <span className="tiny muted">state and score are held per campaign, not per person</span>
           </div>
-          <div className="panel-body tight">
+          <div className="q-list">
             {data.campaigns.map((c) => (
               <div className="q-item" key={c.campaign_id}>
                 <div className="q-head">

@@ -23,6 +23,7 @@ import knowledgeRoutes from './routes/knowledge.js';
 import controlRoutes from './routes/controls.js';
 import repRoutes from './routes/reps.js';
 import jobRoutes from './routes/jobs.js';
+import messageRoutes from './routes/messages.js';
 
 import { startWorker, stopWorker } from './worker.js';
 import { reapAbandonedJobs, cancelAllJobs, activeJobIds } from './orchestrator/jobs.js';
@@ -109,6 +110,7 @@ app.use('/knowledge', knowledgeRoutes);
 app.use('/controls', controlRoutes);
 app.use('/reps', repRoutes);
 app.use('/jobs', jobRoutes);
+app.use('/messages', messageRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

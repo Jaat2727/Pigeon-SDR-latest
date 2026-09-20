@@ -44,6 +44,8 @@ export const Icons = {
   refresh: ico('M20 12a8 8 0 1 1-2.4-5.7M20 4v4h-4'),
   send: ico('M21 3L10.5 13.5M21 3l-6.8 18-3.7-7.5L3 10z'),
   logout: ico('M15 17l5-5-5-5M20 12H9M12 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6'),
+  mail: ico('m3 7 9 6 9-6', <rect key="r" x="3" y="5" width="18" height="14" rx="2" />),
+  corner: ico('M9 14 4 9l5-5M4 9h10a6 6 0 0 1 6 6v3'),
 };
 
 /* ── small display pieces ────────────────────────────────────────────── */

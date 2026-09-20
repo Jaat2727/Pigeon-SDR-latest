@@ -19,6 +19,8 @@ import {
 } from '../components/ui.jsx';
 import NewCampaign from '../components/NewCampaign.jsx';
 
+const STATUS_TONE = { live: 'ok', paused: 'warn', archived: 'grey', draft: 'line' };
+
 export default function Dashboard() {
   const { campaigns, queue, refresh, setError, connection, actor, setScope } = useApp();
   const navigate = useNavigate();
@@ -59,8 +61,9 @@ export default function Dashboard() {
 
   const live = campaigns.filter((c) => c.status === 'live');
   const totalProspects = campaigns.reduce((sum, c) => sum + (c.prospect_count ?? 0), 0);
+  const totalQualified = campaigns.reduce((sum, c) => sum + (c.qualified_count ?? 0), 0);
   const totalMeetings = campaigns.reduce((sum, c) => sum + (c.meetings_count ?? 0), 0);
-  const totalContacted = campaigns.reduce((sum, c) => sum + (c.contacted_count ?? 0), 0);
+  const waiting = queue?.stats?.open_approvals ?? 0;
 
   return (
     <>
@@ -94,21 +97,31 @@ export default function Dashboard() {
 
         {campaigns.length > 0 && (
           <div className="panel">
-            <div className="panel-body grid-3" style={{ borderBottom: '1px solid var(--line)' }}>
+            <div className="panel-body stats" style={{ borderBottom: '1px solid var(--line)' }}>
               <div>
-                <div className="muted small">Live campaigns</div>
-                <div style={{ fontSize: 24, fontWeight: 600, marginTop: 4 }}>
-                  {live.length} <span className="tiny dim">of {campaigns.length}</span>
-                </div>
+                <div className="stat-n">{live.length}<span className="tiny dim"> / {campaigns.length}</span></div>
+                <div className="stat-l">campaigns live</div>
               </div>
               <div>
-                <div className="muted small">Prospects across all campaigns</div>
-                <div style={{ fontSize: 24, fontWeight: 600, marginTop: 4 }}>{totalProspects}</div>
-                <div className="tiny dim" style={{ marginTop: 4 }}>{totalContacted} contacted</div>
+                <div className="stat-n">{totalProspects}</div>
+                <div className="stat-l">prospects, every campaign</div>
               </div>
               <div>
-                <div className="muted small">Meetings booked</div>
-                <div style={{ fontSize: 24, fontWeight: 600, marginTop: 4 }}>{totalMeetings}</div>
+                <div className="stat-n">{totalQualified}</div>
+                <div className="stat-l">qualified</div>
+              </div>
+              <div>
+                <div className="stat-n">{totalMeetings}</div>
+                <div className="stat-l">meetings booked</div>
+              </div>
+              <div
+                className={waiting > 0 ? 'clickable' : ''}
+                style={waiting > 0 ? { cursor: 'pointer' } : undefined}
+                onClick={waiting > 0 ? () => navigate('/queue') : undefined}
+                title={waiting > 0 ? 'Open the queue' : undefined}
+              >
+                <div className="stat-n" style={{ color: waiting > 0 ? 'var(--accent-ink)' : undefined }}>{waiting}</div>
+                <div className="stat-l">waiting on you</div>
               </div>
             </div>
 
@@ -137,7 +150,8 @@ export default function Dashboard() {
                     <th>ICP</th>
                     <th>Status</th>
                     <th className="num-cell">Prospects</th>
-                    <th className="num-cell">Outreach</th>
+                    <th className="num-cell">Qualified</th>
+                    <th className="num-cell">Contacted</th>
                     <th className="num-cell">Meetings</th>
                     <th />
                   </tr>
@@ -153,11 +167,10 @@ export default function Dashboard() {
                         {c.icp_criteria ? c.icp_criteria.slice(0, 60) + (c.icp_criteria.length > 60 ? '…' : '') : '—'}
                       </td>
                       <td>
-                        <Pill tone={c.status === 'live' ? 'ok' : c.status === 'paused' ? 'warn' : c.status === 'archived' ? 'grey' : 'line'} dot>
-                          {c.status}
-                        </Pill>
+                        <Pill tone={STATUS_TONE[c.status] ?? 'grey'} dot>{c.status}</Pill>
                       </td>
                       <td className="num-cell">{c.prospect_count ?? 0}</td>
+                      <td className="num-cell">{c.qualified_count ?? 0}</td>
                       <td className="num-cell">{c.contacted_count ?? 0}</td>
                       <td className="num-cell">{c.meetings_count ?? 0}</td>
                       <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>

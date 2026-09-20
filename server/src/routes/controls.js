@@ -18,6 +18,7 @@ import { getSystemControl, setSystemControl, explainGate } from '../orchestrator
 import { logActivity } from '../services/activity.js';
 import { VISIBLE_AGENTS } from '../agents/registry.js';
 import { listJobs, cancelAllJobs, cancelJobsForCampaign } from '../orchestrator/jobs.js';
+import { verifyMailer, sendEmail, mailerStatus } from '../services/mailer.js';
 
 const router = express.Router();
 
@@ -106,9 +107,55 @@ router.get('/', asyncHandler(async (req, res) => {
     })),
     check_order: CHECK_ORDER,
     gate,
+    mailer: mailerStatus(),
     updated_by: control.updated_by,
     updated_at: control.updated_at,
   });
+}));
+
+/**
+ * POST /controls/mailer/test
+ *
+ * Checks the SMTP credentials, and — when an address is given — actually
+ * sends a one-off email to it. Nothing is written to `messages` or any
+ * campaign; this exists purely to answer "is this configured right" without
+ * needing a real campaign, an approval, and a prospect record to find out.
+ */
+router.post('/mailer/test', asyncHandler(async (req, res) => {
+  const to = req.body?.to?.trim() || null;
+  const actor = req.body?.actor || 'operator';
+
+  const verify = await verifyMailer();
+  if (!verify.configured) {
+    return res.json({ ...verify, sent: null });
+  }
+  if (!verify.ok) {
+    return res.json({ ...verify, sent: null });
+  }
+  if (!to) {
+    return res.json({ ...verify, sent: null, note: 'Credentials check out. Give "to" to send an actual test email.' });
+  }
+
+  const result = await sendEmail({
+    to,
+    subject: 'Pigeon — test send',
+    body:
+      `This is a test send from Pigeon's SMTP configuration, triggered by ${actor}.\n\n` +
+      `If this landed in your inbox, email delivery is live: an approved message will actually ` +
+      `send, not just get recorded as sent.`,
+    fromName: 'Pigeon',
+  });
+
+  await logActivity({
+    agentName: 'system',
+    action: result.sent ? 'Sent a test email' : 'Test email failed',
+    detail: result.sent
+      ? `${actor} sent a test email to ${to}.`
+      : `${actor} tried a test email to ${to}: ${result.error}`,
+    status: result.sent ? 'success' : 'failed',
+  });
+
+  res.json({ ...verify, sent: result.sent, to, error: result.error ?? null, message_id: result.message_id ?? null });
 }));
 
 /**

@@ -66,8 +66,16 @@ export function useJob(jobId, { onFinish } = {}) {
         }
       } catch (err) {
         if (!alive) return;
+
+        // A 404 means the job itself is gone — nothing will ever come back
+        // from polling it again, so stop. Anything else (a timeout, a 500, the
+        // dev server restarting mid-request) is transient: stopping the
+        // interval here used to mean one dropped request left the progress
+        // bar frozen mid-run, looking stuck, forever — with no way to recover
+        // short of leaving the page and coming back. Show the error but keep
+        // polling; the next tick clears it the moment the API answers again.
         setError(friendlyError(err));
-        clearInterval(timer);
+        if (err?.status === 404) clearInterval(timer);
       }
     };
 
@@ -133,7 +141,13 @@ const TYPE_LABEL = {
  * reads as stuck rather than as starting.
  */
 export function JobProgress({ job, error, onCancel, actor = 'operator', compact = false }) {
-  if (error) {
+  // An error with no job yet means the very first poll failed — nothing to
+  // show underneath it. An error *with* a job means a later poll dropped
+  // (the dev server restarting mid-request, a brief network blip): keep
+  // showing the last known progress rather than blanking the panel to just
+  // the error, since polling is still retrying underneath and will clear
+  // this the moment it succeeds.
+  if (error && !job) {
     return (
       <div className="job-panel">
         <div className="small" style={{ color: 'var(--stop)' }}>{error}</div>
@@ -175,6 +189,12 @@ export function JobProgress({ job, error, onCancel, actor = 'operator', compact 
           </ActionButton>
         )}
       </div>
+
+      {error && running && (
+        <div className="tiny" style={{ color: 'var(--warn)' }}>
+          Lost the connection for a moment — still trying. Showing the last update it got.
+        </div>
+      )}
 
       <div className={`job-bar ${pct === null && running ? 'indeterminate' : ''}`}>
         <i

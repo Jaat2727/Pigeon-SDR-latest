@@ -477,6 +477,84 @@ router.post('/:id/duplicate', asyncHandler(async (req, res) => {
   );
 }));
 
+/**
+ * DELETE /campaigns/:id?keepProspects=true|false
+ *
+ * Deleting the campaign row cascades: its memberships, messages, prompt
+ * versions, knowledge chunks, approvals and jobs all go with it (that is the
+ * point — a deleted campaign should not leave orphaned rows a report has to
+ * explain), and its agent_runs are kept with campaign_id set to null rather
+ * than deleted, so the numbers on the Agents screen do not quietly drop.
+ *
+ * The one real choice is what happens to the *people*. Default is to keep
+ * them: a prospect this campaign found is still a real person, and the next
+ * campaign that searches for someone at the same company should find them
+ * again rather than re-adding a duplicate. `keepProspects=false` instead
+ * deletes every prospect that was *only* in this campaign — someone also
+ * being worked by a second live campaign is never touched, whichever way
+ * this is set, because deleting them out from under a campaign that still
+ * has them mid-sequence would be a much worse surprise than an extra row.
+ */
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const campaign = unwrapSoft(
+    await supabase.from('campaigns').select('id, name').eq('id', req.params.id).maybeSingle(),
+    null,
+    'campaigns'
+  );
+  if (!campaign) throw notFound('No such campaign');
+
+  const keepProspects = req.query.keepProspects !== 'false';
+
+  const memberships = unwrapSoft(
+    await supabase.from('campaign_prospects').select('prospect_id').eq('campaign_id', req.params.id),
+    [],
+    'campaign_prospects'
+  );
+  const prospectIds = [...new Set(memberships.map((m) => m.prospect_id))];
+
+  const { error } = await supabase.from('campaigns').delete().eq('id', req.params.id);
+  if (error) throw new Error(`campaign delete: ${error.message}`);
+
+  let deletedProspects = 0;
+  if (!keepProspects && prospectIds.length > 0) {
+    // The campaign's own memberships are already gone (cascaded with it), so
+    // "still has other memberships" now means "is in some other campaign".
+    const stillLinked = unwrapSoft(
+      await supabase.from('campaign_prospects').select('prospect_id').in('prospect_id', prospectIds),
+      [],
+      'campaign_prospects'
+    );
+    const linkedElsewhere = new Set(stillLinked.map((r) => r.prospect_id));
+    const onlyHere = prospectIds.filter((id) => !linkedElsewhere.has(id));
+
+    if (onlyHere.length > 0) {
+      const { error: delErr, count } = await supabase
+        .from('prospects')
+        .delete({ count: 'exact' })
+        .in('id', onlyHere);
+      if (delErr) throw new Error(`prospect delete: ${delErr.message}`);
+      deletedProspects = count ?? onlyHere.length;
+    }
+  }
+
+  await logActivity({
+    agentName: 'system',
+    action: 'Deleted a campaign',
+    detail: keepProspects
+      ? `Deleted "${campaign.name}". ${prospectIds.length} prospect(s) kept — they stay findable for future campaigns.`
+      : `Deleted "${campaign.name}" and ${deletedProspects} prospect(s) who were only in it. ` +
+        `${prospectIds.length - deletedProspects} were also in another campaign and were left alone.`,
+    status: 'success',
+  });
+
+  res.json({
+    deleted: true,
+    campaign_id: req.params.id,
+    prospects_kept: keepProspects ? prospectIds.length : prospectIds.length - deletedProspects,
+    prospects_deleted: deletedProspects,
+  });
+}));
+
 /** GET /campaigns/:id/prompts — active prompt per agent. */
 router.get('/:id/prompts', asyncHandler(async (req, res) => {
   const rows = unwrapSoft(

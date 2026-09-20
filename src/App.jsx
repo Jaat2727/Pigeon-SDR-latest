@@ -1,10 +1,11 @@
-import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useApp } from './context/AppContext.jsx';
 import { Icons, Banner, Loading } from './components/ui.jsx';
 
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Queue from './pages/Queue.jsx';
+import Inbox from './pages/Inbox.jsx';
 import Prospects from './pages/Prospects.jsx';
 import ProspectDetail from './pages/ProspectDetail.jsx';
 import Campaigns from './pages/Campaigns.jsx';
@@ -17,8 +18,15 @@ const NAV = [
   { to: '/campaigns', label: 'Campaigns', icon: Icons.target },
   { to: '/prospects', label: 'Prospects', icon: Icons.people },
   { to: '/queue', label: 'Approvals', icon: Icons.queue, badge: 'approvals' },
-  { to: '/agents', label: 'Agents', icon: Icons.bot },
+  { to: '/inbox', label: 'Inbox', icon: Icons.send },
   { to: '/knowledge', label: 'Knowledge', icon: Icons.book },
+];
+
+// Configuration, not day-to-day work — kept out of the main list and grouped
+// under its own label at the bottom of the sidebar, one step removed from
+// the screens an operator opens every run.
+const SETTINGS_NAV = [
+  { to: '/agents', label: 'Agents', icon: Icons.bot },
   { to: '/controls', label: 'Controls', icon: Icons.shield },
 ];
 
@@ -41,7 +49,9 @@ function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark">P</div>
+        <div className="brand-mark">
+          <img src="/logo-icon.png" alt="Pigeon" />
+        </div>
         <div>
           <div className="brand-name">Pigeon</div>
           <div className="brand-sub">Autonomous SDR</div>
@@ -56,6 +66,16 @@ function Sidebar() {
             {badge === 'approvals' && openApprovals > 0 && (
               <span className="nav-count alert">{openApprovals}</span>
             )}
+          </NavLink>
+        ))}
+      </nav>
+
+      <nav className="nav nav-settings">
+        <div className="nav-label">Settings</div>
+        {SETTINGS_NAV.map(({ to, label: text, icon: I }) => (
+          <NavLink key={to} to={to} className={({ isActive }) => `nav-item ${isActive ? 'on' : ''}`}>
+            <I className="nav-icon" />
+            {text}
           </NavLink>
         ))}
       </nav>
@@ -81,6 +101,43 @@ function Sidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+const JOB_TYPE_LABEL = {
+  campaign_run: 'Running',
+  discovery: 'Finding people for',
+  prospect_advance: 'Advancing a prospect in',
+};
+
+const JOB_DESTINATION = { campaign_run: '/campaigns', discovery: '/campaigns', prospect_advance: '/prospects' };
+
+/**
+ * Visible on every screen, not just the one that started the job. A run takes
+ * minutes and keeps going on the server no matter where you navigate to; the
+ * one thing worth surfacing everywhere is that it is still in flight and
+ * where to go watch it, so leaving the page never means losing track of it.
+ */
+function ActiveJobsBar() {
+  const { activeJobs } = useApp();
+  if (!activeJobs?.length) return null;
+
+  const [first, ...rest] = activeJobs;
+  const pct = first.percent;
+
+  return (
+    <Link to={JOB_DESTINATION[first.type] ?? '/campaigns'} className="job-bar-global">
+      <span className="spin" />
+      <span className="job-bar-text">
+        {JOB_TYPE_LABEL[first.type] ?? first.type} {first.campaign_name ?? 'a campaign'}
+        {first.total > 0 ? ` — ${first.processed}/${first.total}` : ''}
+        {rest.length > 0 ? ` · +${rest.length} more running` : ''}
+      </span>
+      <span className="job-bar-track">
+        <i style={{ width: pct === null ? '30%' : `${pct}%` }} />
+      </span>
+      <span className="job-bar-go">View <Icons.chevron size={11} /></span>
+    </Link>
   );
 }
 
@@ -134,10 +191,12 @@ export default function App() {
     <div className="shell">
       <Sidebar />
       <div className="main">
+        <ActiveJobsBar />
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace state={{ from: location }} />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/queue" element={<Queue />} />
+          <Route path="/inbox" element={<Inbox />} />
           <Route path="/prospects" element={<Prospects />} />
           <Route path="/prospects/:id" element={<ProspectDetail />} />
           <Route path="/campaigns" element={<Campaigns />} />

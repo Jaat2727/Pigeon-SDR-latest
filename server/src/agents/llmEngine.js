@@ -327,7 +327,7 @@ async function withTimeout(fn, timeoutMs, outerSignal) {
   }
 }
 
-async function callGroqWithKey({ system, user, key, model, signal }) {
+async function callGroqWithKey({ system, user, key, model, signal, maxTokens = 2000 }) {
   const res = await withTimeout(
     (sig) =>
       fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -340,7 +340,7 @@ async function callGroqWithKey({ system, user, key, model, signal }) {
             { role: 'user', content: user },
           ],
           temperature: 0.4,
-          max_tokens: 2000,
+          max_tokens: maxTokens,
           response_format: { type: 'json_object' },
         }),
         signal: sig,
@@ -381,7 +381,7 @@ async function callGroqWithKey({ system, user, key, model, signal }) {
   };
 }
 
-async function callGeminiWithKey({ system, user, key, model, signal }) {
+async function callGeminiWithKey({ system, user, key, model, signal, maxTokens = 2000 }) {
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -397,7 +397,7 @@ async function callGeminiWithKey({ system, user, key, model, signal }) {
           contents: [{ role: 'user', parts: [{ text: user }] }],
           generationConfig: {
             temperature: 0.4,
-            maxOutputTokens: 2000,
+            maxOutputTokens: maxTokens,
             responseMimeType: 'application/json',
           },
         }),
@@ -452,7 +452,7 @@ const TRANSPORT = { groq: callGroqWithKey, gemini: callGeminiWithKey };
  * returns the first combination that answers. Each attempt is recorded so the
  * caller can show exactly what was tried rather than one merged error string.
  */
-async function callProvider(provider, system, user, { signal, attempts }) {
+async function callProvider(provider, system, user, { signal, attempts, maxTokens }) {
   const status = poolStatus(provider);
   if (status.total === 0) return null;
 
@@ -483,7 +483,7 @@ async function callProvider(provider, system, user, { signal, attempts }) {
     const started = Date.now();
 
     try {
-      const { text, usage } = await TRANSPORT[provider]({ system, user, key: entry.key, model, signal });
+      const { text, usage } = await TRANSPORT[provider]({ system, user, key: entry.key, model, signal, maxTokens });
       const latency = Date.now() - started;
 
       const parsed = parseLooseJson(text);
@@ -537,6 +537,27 @@ async function callProvider(provider, system, user, { signal, attempts }) {
  * @param {object} payload
  * @param {{signal?: AbortSignal}} [options]
  */
+/**
+ * How many output tokens to allow. A flat 2000 was enough for a single
+ * object with half a dozen fields and starved the one agent that returns a
+ * *list*: discovery asking for 25 candidates, each with company, industry,
+ * headcount, a role and a reasoning sentence, needs several times that — and
+ * running out mid-array does not degrade gracefully, it truncates the JSON
+ * and the whole response fails to parse. That surfaced as Groq's
+ * "json_validate_failed", which reads like a prompt problem and is actually
+ * a budget problem.
+ */
+function maxTokensFor(agentName, payload) {
+  if (agentName === 'discovery') {
+    const count = Math.max(1, Math.min(Number(payload?.how_many) || 10, 25));
+    // ~260 tokens per candidate is generous for the shape asked for, plus a
+    // fixed cost for search_reasoning and caveats.
+    return Math.min(8000, 1200 + count * 260);
+  }
+  if (agentName === 'research') return 2800;
+  return 2000;
+}
+
 export async function callLlm(agentName, payload, { signal } = {}) {
   const providers = configuredLlmProviders();
   if (providers.length === 0) {
@@ -547,10 +568,11 @@ export async function callLlm(agentName, payload, { signal } = {}) {
   }
 
   const { system, user } = buildPrompt(agentName, payload);
+  const maxTokens = maxTokensFor(agentName, payload);
   const attempts = [];
 
   for (const provider of providers) {
-    const result = await callProvider(provider, system, user, { signal, attempts });
+    const result = await callProvider(provider, system, user, { signal, attempts, maxTokens });
     if (result) return { ...result, attempts };
   }
 

@@ -32,6 +32,7 @@ export function AppProvider({ children }) {
   const [queue, setQueue] = useState(null);
   const [scope, setScope] = useState(''); // '' means every campaign
   const [error, setError] = useState(null);
+  const [activeJobs, setActiveJobs] = useState([]);
 
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -132,6 +133,39 @@ export function AppProvider({ children }) {
     if (user) refresh();
   }, [scope, user, refresh]);
 
+  /* ── jobs, watched from everywhere ────────────────────────────────────
+   * A campaign run or a discovery sweep takes minutes and happens on the
+   * server regardless of which screen is open. Without this, leaving the
+   * page that started it makes the work invisible — nothing on Agents,
+   * Prospects or Queue would say anything is happening, so a run that is
+   * genuinely still going looks like it silently did nothing. Polled
+   * faster than the general refresh because "is something running" is the
+   * one thing worth noticing quickly. */
+  const refreshJobs = useCallback(async () => {
+    if (!isApiConfigured) return;
+    try {
+      const { jobs } = await api.listJobs({ status: 'queued,running', limit: 20 });
+      setActiveJobs(jobs);
+    } catch {
+      // A failed poll should not blank out a bar someone is watching.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user || !isApiConfigured) return undefined;
+
+    let timer = null;
+    const tick = () => { if (document.visibilityState === 'visible') refreshJobs(); };
+
+    tick();
+    timer = setInterval(tick, 5000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [user, refreshJobs]);
+
   const actor = user?.name ?? 'operator';
 
   const value = {
@@ -140,6 +174,7 @@ export function AppProvider({ children }) {
     campaigns, queue, refresh,
     scope, setScope,
     error, setError,
+    activeJobs, refreshJobs,
     openApprovals: queue?.stats?.open_approvals ?? 0,
   };
 

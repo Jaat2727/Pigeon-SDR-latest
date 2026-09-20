@@ -19,6 +19,25 @@
  *
  *   node scripts/verify-failover.js
  */
+
+// config.js merges three shapes per provider — API_KEY, API_KEYS, and
+// API_KEY_1.._6 — so setting only API_KEY here is not isolation: a real
+// server/.env sitting next to this script with GROQ_API_KEY_2 or
+// GEMINI_API_KEY_2 set (entirely reasonable — that is what a real deployment
+// looks like) leaks extra real keys into the pool this test builds, and
+// every count-based assertion below goes wrong for a reason that has
+// nothing to do with the failover behaviour being tested.
+//
+// Set to '' rather than deleted: config.js loads server/.env with dotenv
+// after this runs, and dotenv fills in anything still *unset* — an empty
+// string counts as set and is what stops that refill, where `delete` would
+// not.
+for (const prefix of ['GROQ', 'GEMINI']) {
+  process.env[`${prefix}_API_KEY`] = '';
+  process.env[`${prefix}_API_KEYS`] = '';
+  for (let i = 1; i <= 6; i += 1) process.env[`${prefix}_API_KEY_${i}`] = '';
+}
+
 process.env.GROQ_API_KEY = 'gsk_alpha_1111,gsk_bravo_2222,gsk_charlie_33';
 process.env.GEMINI_API_KEY = 'AIza_gem_one_1,AIza_gem_two_2';
 process.env.LLM_TIMEOUT_MS = '3000';

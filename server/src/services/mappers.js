@@ -6,15 +6,33 @@
  */
 import { actorFor } from './activity.js';
 
+const companyOf = (p) => p?.enriched_data?.company?.name || p?.company_name || null;
+const titleOf = (p) => p?.enriched_data?.person?.title || p?.title || null;
+
+/**
+ * "Unknown prospect" used to be the fallback for any lead with no named
+ * individual, which is a real and common state — LLM discovery deliberately
+ * leaves a person unnamed rather than inventing one, and names only the role
+ * worth approaching. That is not "unknown", it is "not yet named", and the
+ * UI should say the thing it actually knows (the role and the company)
+ * rather than the thing it does not. "Unknown prospect" is now reserved for
+ * the genuinely empty case — no name, no title, no company, no email.
+ */
 const nameOf = (p) => {
   if (!p) return 'Unknown prospect';
   const enriched = p.enriched_data?.person?.full_name;
   const joined = [p.first_name, p.last_name].filter(Boolean).join(' ');
-  return enriched || p.full_name || joined || p.email || 'Unknown prospect';
-};
+  const personal = enriched || p.full_name || joined;
+  if (personal) return personal;
 
-const companyOf = (p) => p?.enriched_data?.company?.name || p?.company_name || null;
-const titleOf = (p) => p?.enriched_data?.person?.title || p?.title || null;
+  const title = titleOf(p);
+  const company = companyOf(p);
+  if (title && company) return `${title} at ${company}`;
+  if (company) return `Unnamed contact at ${company}`;
+  if (title) return title;
+
+  return p.email || 'Unknown prospect';
+};
 
 export function mapCampaign(row, extra = {}) {
   if (!row) return null;

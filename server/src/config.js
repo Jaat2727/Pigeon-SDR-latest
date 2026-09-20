@@ -176,6 +176,34 @@ export const env = {
   // a demo cannot quietly drain an account.
   APOLLO_REVEAL_EMAILS: bool('APOLLO_REVEAL_EMAILS', false),
   APOLLO_TIMEOUT_MS: int('APOLLO_TIMEOUT_MS', 20000),
+
+  // ── delivery ───────────────────────────────────────────────────────────
+  // Real email, over SMTP via Nodemailer. Unset, and an approved email is
+  // recorded as sent without a provider behind it, exactly as before this
+  // existed — the thread says so and `simulated_delivery` is true on the
+  // activity row. Set these four and it actually leaves the building.
+  SMTP_HOST: str('SMTP_HOST'),
+  SMTP_PORT: int('SMTP_PORT', 587),
+  // 465 is implicit TLS; anything else (587, 25) starts plain and upgrades
+  // with STARTTLS. Nodemailer needs to be told which, not guess from the port.
+  SMTP_SECURE: bool('SMTP_SECURE', false),
+  SMTP_USER: str('SMTP_USER'),
+  SMTP_PASS: str('SMTP_PASS'),
+  // The address mail is actually sent from. Most providers require this to be
+  // the authenticated account (or a verified alias of it), so it defaults to
+  // SMTP_USER rather than something a campaign or rep could set freely.
+  SMTP_FROM: str('SMTP_FROM'),
+  SMTP_TIMEOUT_MS: int('SMTP_TIMEOUT_MS', 15000),
+
+  // Sandbox mode: every real send is redirected here instead of the
+  // prospect's actual address, whether or not that prospect has an email on
+  // record at all. For testing the full approve-and-send path against seed
+  // or hand-typed prospects without needing a real inbox for each one, and
+  // without risking an accidental send to a real person while a campaign's
+  // targeting is still being worked out. The original intended recipient is
+  // kept in the subject line and the activity log, never silently dropped.
+  // Unset this before anything resembling a real campaign goes out.
+  SMTP_SANDBOX_TO: str('SMTP_SANDBOX_TO'),
 };
 
 export function isLlmEngineConfigured() {
@@ -184,6 +212,10 @@ export function isLlmEngineConfigured() {
 
 export function isDiscoveryConfigured() {
   return Boolean(env.APOLLO_API_KEY) || isLlmEngineConfigured();
+}
+
+export function isMailerConfigured() {
+  return Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
 }
 
 /** Which discovery source a run would use right now, and why. */
@@ -252,6 +284,9 @@ export function configReport() {
     model_auto_discover: env.MODEL_AUTO_DISCOVER,
     discovery: discoveryRouting(),
     agent_routing,
+    mailer: isMailerConfigured()
+      ? { configured: true, host: env.SMTP_HOST, from: env.SMTP_FROM || env.SMTP_USER, sandbox_to: env.SMTP_SANDBOX_TO || null }
+      : { configured: false, reason: 'SMTP_HOST, SMTP_USER and SMTP_PASS are not all set. Email sends are simulated.' },
   };
 }
 

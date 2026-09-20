@@ -46,7 +46,9 @@ export default function Login() {
       <div className="login-left">
         <div className="login-card">
           <div className="row" style={{ gap: 9, marginBottom: 22 }}>
-            <div className="brand-mark" style={{ width: 28, height: 28, fontSize: 13 }}>P</div>
+            <div className="brand-mark" style={{ width: 32, height: 32 }}>
+              <img src="/logo-icon.png" alt="Pigeon" />
+            </div>
             <div>
               <div className="brand-name" style={{ fontSize: 16 }}>Pigeon</div>
               <div className="brand-sub">Autonomous SDR</div>

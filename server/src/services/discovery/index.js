@@ -160,9 +160,14 @@ export async function addCandidate(candidate, campaignId, { source, note = null 
   const row = {
     first_name: candidate.first_name ?? null,
     last_name: candidate.last_name ?? null,
+    // `??` only falls through on null/undefined, and an empty join() is
+    // neither — a candidate discovery deliberately left unnamed used to
+    // store full_name as '' rather than null, which then broke every
+    // downstream `?? fallback` that assumed a real name is either present
+    // or null. `||` treats the empty string as absent, which is what it is.
     full_name:
-      candidate.full_name ??
-      [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ??
+      candidate.full_name ||
+      [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
       null,
     title: candidate.title ?? null,
     // Never a guess. A locked Apollo record and a model suggestion both store

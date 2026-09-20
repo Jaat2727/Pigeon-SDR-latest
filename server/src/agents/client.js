@@ -78,6 +78,7 @@ async function recordRun(row) {
       // a later migration. Rather than lose the run entirely, drop those three
       // fields and write the row the original schema can hold.
       if (error.code === '42703') {
+        // eslint-disable-next-line no-unused-vars -- destructured only to omit them below
         const { llm_provider, llm_model, llm_key, ...core } = row;
         const retry = await supabase.from('agent_runs').insert(core).select('id').single();
         if (!retry.error) return retry.data.id;

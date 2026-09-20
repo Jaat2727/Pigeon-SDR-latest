@@ -452,6 +452,88 @@ function ImportDialog({ campaign, onClose, onImported }) {
   );
 }
 
+/* ── deleting a campaign ─────────────────────────────────────────────── */
+
+function DeleteCampaign({ campaign, onClose, onDeleted }) {
+  const [keepProspects, setKeepProspects] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  return (
+    <Modal
+      title={`Delete "${campaign.name}"?`}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <ActionButton
+            className="btn danger"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              try {
+                const res = await api.deleteCampaign(campaign.id, { keepProspects });
+                await onDeleted(res);
+              } catch (err) {
+                setError(friendlyError(err));
+                setBusy(false);
+              }
+            }}
+          >
+            Delete campaign
+          </ActionButton>
+        </>
+      }
+    >
+      <div className="stack-sm">
+        {error && <Banner tone="stop">{error}</Banner>}
+
+        <p style={{ margin: 0 }}>
+          This removes the campaign itself and everything that only exists because of it: its
+          prompts, its message history, its knowledge chunks, its pending approvals. This cannot
+          be undone.
+        </p>
+
+        <div className="field">
+          <label className="label">
+            What happens to the {campaign.prospect_count ?? 0} prospect{campaign.prospect_count === 1 ? '' : 's'} in it
+          </label>
+
+          <div className="card-choices" style={{ gridTemplateColumns: '1fr' }}>
+            <button
+              type="button"
+              className={`card-choice ${keepProspects ? 'on' : ''}`}
+              onClick={() => setKeepProspects(true)}
+            >
+              <div className="card-choice-title">Keep them (recommended)</div>
+              <div className="small dim">
+                They stay in the database, just no longer linked to this campaign. If a future
+                campaign searches for the same people, they are found and linked again instead of
+                being added as duplicates.
+              </div>
+            </button>
+
+            <button
+              type="button"
+              className={`card-choice ${!keepProspects ? 'on' : ''}`}
+              onClick={() => setKeepProspects(false)}
+            >
+              <div className="card-choice-title">Delete them too</div>
+              <div className="small dim">
+                Removes every prospect who was <i>only</i> in this campaign. Anyone also being
+                worked by another live campaign is always left alone, whichever option is picked
+                here — deleting a person out from under a campaign that still has them mid-sequence
+                would be a worse surprise than one extra row.
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ── the editor ───────────────────────────────────────────────────────── */
 
 function Editor({ campaign, onClose, onSaved, initialTab = 'activity' }) {
@@ -827,6 +909,7 @@ export default function Campaigns() {
   const [creating, setCreating] = useState(false);
   const [discovering, setDiscovering] = useState(null);
   const [importing, setImporting] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const [busy, setBusy] = useState(null);
   const [reps, setReps] = useState([]);
 
@@ -978,6 +1061,15 @@ export default function Campaigns() {
                     {busy === c.id ? <span className="spin" /> : NEXT_LABEL[next] ?? next}
                   </button>
                 ))}
+
+                <button
+                  className="btn sm ghost"
+                  style={{ color: 'var(--stop)' }}
+                  onClick={() => setDeleting(c)}
+                  title="Delete this campaign"
+                >
+                  <Icons.x size={12} />
+                </button>
               </div>
 
               <div className="panel-body stack-sm">
@@ -1070,6 +1162,14 @@ export default function Campaigns() {
           campaign={importing}
           onClose={() => setImporting(null)}
           onImported={refresh}
+        />
+      )}
+
+      {deleting && (
+        <DeleteCampaign
+          campaign={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={async () => { setDeleting(null); await refresh(); }}
         />
       )}
     </>

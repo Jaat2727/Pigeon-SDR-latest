@@ -590,6 +590,18 @@ compiled into the JavaScript the browser downloads.
 | `APOLLO_REVEAL_EMAILS` | `false` | Spends one credit per person when true |
 | `APOLLO_TIMEOUT_MS` | `20000` | |
 
+**Delivery**
+
+| Variable | Default | What it is |
+|---|---|---|
+| `SMTP_HOST` | | Unset means email stays simulated, same as every other channel |
+| `SMTP_PORT` | `587` | `465` for implicit TLS, `587`/`25` for STARTTLS |
+| `SMTP_SECURE` | `false` | Must be `true` if `SMTP_PORT=465` |
+| `SMTP_USER` | | The authenticated mailbox. For Gmail, a full `@gmail.com` address. |
+| `SMTP_PASS` | | For Gmail, an App Password (myaccount.google.com/apppasswords), not the login password |
+| `SMTP_FROM` | `SMTP_USER` | Most providers require this to be the authenticated account or a verified alias |
+| `SMTP_TIMEOUT_MS` | `15000` | |
+
 **Running**
 
 | Variable | Default | What it is |
@@ -747,10 +759,16 @@ src/
 These are real gaps. They are listed here rather than hidden because a system
 that overstates what it does is harder to trust about the parts it gets right.
 
-**No email or LinkedIn provider is connected.** A message marked "sent" is
-recorded, not delivered. Everything up to that point is real: the message is
-written by a model, grounded in real research, approved by a person, and
-recorded against the prospect.
+**Email sends for real; LinkedIn does not.** `server/src/services/mailer.js`
+sends over SMTP via Nodemailer — set `SMTP_HOST`, `SMTP_USER` and `SMTP_PASS`
+(see `.env.example` for the Gmail App Password walkthrough) and an approved
+email actually leaves, not just gets recorded. Leave them unset and it behaves
+exactly as before: recorded as sent, thread says simulated. LinkedIn, SMS and
+voice have no provider wired at all and stay simulated regardless — everything
+up to the send is still real either way: the message is written by a model,
+grounded in real research, and approved by a person before any of this
+triggers. Verify the SMTP account from **Controls → Delivery**, including a
+real test send to any address, without touching a campaign.
 
 **No inbox.** Replies are typed in by hand on the prospect page. They then go
 through the identical classify-and-route logic a real inbox would feed, so the

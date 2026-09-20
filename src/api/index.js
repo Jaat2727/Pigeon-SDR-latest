@@ -21,6 +21,7 @@ export const getCampaign = (id) => get(`/campaigns/${id}`);
 export const createCampaign = (body) => post('/campaigns', body);
 export const updateCampaign = (id, body) => patch(`/campaigns/${id}`, body);
 export const duplicateCampaign = (id, body) => post(`/campaigns/${id}/duplicate`, body ?? {});
+export const deleteCampaign = (id, { keepProspects = true } = {}) => del(`/campaigns/${id}${qs({ keepProspects })}`);
 export const getPrompts = (id) => get(`/campaigns/${id}/prompts`);
 export const savePrompt = (id, agent, body) => put(`/campaigns/${id}/prompts/${agent}`, body);
 
@@ -37,6 +38,10 @@ export const previewDiscovery = (id, body) => post(`/campaigns/${id}/discover/pr
 export const listJobs = (params) => get(`/jobs${qs(params)}`);
 export const getJob = (id) => get(`/jobs/${id}`);
 export const cancelJob = (id, body) => post(`/jobs/${id}/cancel`, body ?? {});
+
+/* messages */
+export const listMessages = (params) => get(`/messages${qs(params)}`);
+export const getMessageStats = () => get('/messages/stats');
 
 /* reps */
 export const listReps = () => get('/reps');
@@ -79,6 +84,7 @@ export const setCampaignPause = (body) => post('/controls/campaign', body);
 export const listSuppression = () => get('/controls/suppression');
 export const addSuppression = (body) => post('/controls/suppression', body);
 export const removeSuppression = (id) => del(`/controls/suppression/${id}`);
+export const testMailer = (body) => post('/controls/mailer/test', body ?? {});
 
 /* health */
 export const getSchemaHealth = () => get('/health/schema');
