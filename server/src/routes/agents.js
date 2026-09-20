@@ -1,11 +1,11 @@
 /**
  * Agents: what each one is doing, which engine is actually serving it, and a
- * test call for wiring up DronaHQ.
+ * test call against the LLM engine (Groq, then Gemini).
  *
- * The test call exists because the most common failure in this stack is a
- * webhook answering with a run acknowledgement instead of output, and that is
- * far easier to fix when the deployed app will tell you so than when the only
- * evidence is a null column.
+ * The test call exists because the most common failure in an agent layer
+ * like this is a silent one — a bad key, a rate limit, a model answering with
+ * prose instead of JSON — and that is far easier to fix when the deployed
+ * app names it than when the only evidence is a null column.
  */
 import express from 'express';
 import { supabase, unwrapSoft } from '../db/client.js';
@@ -14,7 +14,8 @@ import { VISIBLE_AGENTS, getAgent } from '../agents/registry.js';
 import { getSystemControl, setSystemControl } from '../orchestrator/gate.js';
 import { computeAgentPerformance } from '../services/metrics.js';
 import { probeAgent } from '../agents/client.js';
-import { isDronaHqConfigured, configReport, envNamesFor } from '../config.js';
+import { configuredLlmProviders } from '../agents/llmEngine.js';
+import { env, isLlmEngineConfigured, configReport } from '../config.js';
 import { logActivity } from '../services/activity.js';
 import { mapRun } from '../services/mappers.js';
 
@@ -97,21 +98,19 @@ const SAMPLE_PAYLOAD = {
 router.get('/', asyncHandler(async (req, res) => {
   const [control, performance] = await Promise.all([getSystemControl(), computeAgentPerformance()]);
   const byId = new Map(performance.map((p) => [p.id, p]));
+  const llmConfigured = isLlmEngineConfigured();
 
   res.json(
     VISIBLE_AGENTS.map((agent) => {
       const perf = byId.get(agent.id);
       const paused = Boolean(control.agent_pauses?.[agent.id]);
-      const configured = isDronaHqConfigured(agent.id);
 
       // What is actually serving this agent right now. An agent that has run
       // reports the engine of its last run. One that has not reports what it
       // would use. An agent that is not built reports its configured engine
       // rather than a fallback, because it has not fallen back to anything.
-      const activeEngine = !agent.callable
-        ? agent.engine
-        : perf?.last_engine ??
-          (agent.engine === 'dronahq' && !configured ? 'local_engine' : agent.engine);
+      const wouldUse = agent.engine === 'llm' ? (llmConfigured ? 'llm_engine' : 'local_engine') : agent.engine;
+      const activeEngine = !agent.callable ? agent.engine : perf?.last_engine ?? wouldUse;
 
       return {
         id: agent.id,
@@ -121,8 +120,7 @@ router.get('/', asyncHandler(async (req, res) => {
         callable: agent.callable,
         configured_engine: agent.engine,
         engine: activeEngine,
-        dronahq_configured: configured,
-        env_names: envNamesFor(agent.id),
+        llm_configured: llmConfigured,
         paused,
         status: !agent.callable
           ? 'not_built'
@@ -196,19 +194,19 @@ router.post('/:id/pause', asyncHandler(async (req, res) => {
 /**
  * POST /agents/:id/test
  *
- * One real call, nothing written to the database, and the raw body returned
- * so a mismatch can be read rather than guessed at.
+ * One real call to the LLM engine, nothing written to the database, and the
+ * raw body returned so a mismatch can be read rather than guessed at.
  */
 router.post('/:id/test', asyncHandler(async (req, res) => {
   const agent = getAgent(req.params.id);
   if (!agent) throw notFound(`Unknown agent "${req.params.id}"`);
   if (!agent.callable) throw badRequest(`${agent.name} is not built yet, so there is nothing to test.`);
-  if (agent.engine !== 'dronahq') {
+  if (agent.engine !== 'llm') {
     return res.json({
       reachable: true,
       valid: true,
       engine: agent.engine,
-      guidance: `${agent.name} runs on our own deterministic engine. There is no webhook to test.`,
+      guidance: `${agent.name} runs on our own deterministic engine. There is nothing to call.`,
     });
   }
 
@@ -216,22 +214,14 @@ router.post('/:id/test', asyncHandler(async (req, res) => {
   const result = await probeAgent(agent.id, payload);
 
   const guidance = {
-    async_acknowledgement:
-      'The webhook answered with a background-run acknowledgement instead of the output. In DronaHQ, ' +
-      'open this agent, go to the Webhook trigger, open Configure Response, switch it from Background ' +
-      'to Standard, paste the output JSON schema, then save and publish.',
-    not_configured: (() => {
-      const names = envNamesFor(agent.id);
-      return `Set ${names.url} and ${names.key} (or a shared ${names.sharedKey}) in the API ` +
-        'environment, then redeploy.';
-    })(),
+    not_configured: 'Set GROQ_API_KEY and/or GEMINI_API_KEY in the API environment, then redeploy.',
     schema_mismatch:
-      'The webhook answered, but the output did not match the expected schema. Compare the raw ' +
+      'The model answered, but the output did not match the expected schema. Compare the raw ' +
       'response below against the schema. It is almost always one field name or one enum spelling.',
-    unparseable:
-      'The webhook answered with something that is not JSON. Add "Return JSON only, no markdown ' +
-      'fences" to the agent instruction.',
-    timeout: 'The webhook did not answer in time. Check the agent is published and the model is responding.',
+    all_providers_failed:
+      `Every configured provider failed (tried: ${configuredLlmProviders().join(', ') || 'none'}, ` +
+      `timeout ${env.LLM_TIMEOUT_MS}ms). The error above lists each attempt's own reason — usually ` +
+      'an invalid or rate-limited key.',
   }[result.error_code] ?? null;
 
   res.json({ ...result, agent_id: agent.id, agent_name: agent.name, sent_payload: payload, guidance });

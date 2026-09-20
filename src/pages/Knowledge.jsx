@@ -6,7 +6,7 @@
  * is a claim, and a claim someone can check in two clicks is worth more than
  * one they cannot.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { ConnectionBanner } from '../App.jsx';
 import * as api from '../api/index.js';
@@ -204,8 +204,8 @@ export default function Knowledge() {
                 </thead>
                 <tbody>
                   {chunks.map((c) => (
-                    <>
-                      <tr key={c.id} className="clickable" onClick={() => setExpanded(expanded === c.id ? null : c.id)}>
+                    <Fragment key={c.id}>
+                      <tr className="clickable" onClick={() => setExpanded(expanded === c.id ? null : c.id)}>
                         <td><Pill tone="grey">{TYPE_LABEL[c.type] ?? c.type}</Pill></td>
                         <td>
                           <div className="cell-main">{c.title}</div>
@@ -238,7 +238,7 @@ export default function Knowledge() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

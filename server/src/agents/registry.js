@@ -1,20 +1,22 @@
 /**
  * The agent registry. One id per agent, used as the primary key everywhere:
  * in agent_runs.agent_name, in activities.agent_name, in prompt_versions,
- * in the pause map, and in the DronaHQ config. Display names are for screens
- * only and are never stored.
+ * and in the pause map. Display names are for screens only and are never
+ * stored.
  *
- * `engine` is what an agent is meant to run on. `callable` marks the agents
- * that exist. Follow-up timing is deterministic by design and has no model
- * behind it; voice is planned and gated but not implemented, and the UI says
- * so rather than showing an idle tile that implies otherwise.
+ * `engine` is what an agent is meant to run on: `llm` for the five that
+ * reason over a prospect (Groq, then Gemini — see llmEngine.js), `our_engine`
+ * for the one that is deliberately deterministic. `callable` marks the
+ * agents that exist. Follow-up timing has no model behind it by design;
+ * voice is planned and gated but not implemented, and the UI says so rather
+ * than showing an idle tile that implies otherwise.
  */
 
 export const AGENT_REGISTRY = [
   {
     id: 'research',
     name: 'Research & Enrichment',
-    engine: 'dronahq',
+    engine: 'llm',
     callable: true,
     order: 1,
     description:
@@ -23,7 +25,7 @@ export const AGENT_REGISTRY = [
   {
     id: 'icp_fitment',
     name: 'ICP Fitment',
-    engine: 'dronahq',
+    engine: 'llm',
     callable: true,
     order: 2,
     description:
@@ -32,7 +34,7 @@ export const AGENT_REGISTRY = [
   {
     id: 'outreach_strategy',
     name: 'Outreach Strategy',
-    engine: 'dronahq',
+    engine: 'llm',
     callable: true,
     order: 3,
     description:
@@ -41,7 +43,7 @@ export const AGENT_REGISTRY = [
   {
     id: 'personalisation',
     name: 'Personalisation',
-    engine: 'dronahq',
+    engine: 'llm',
     callable: true,
     order: 4,
     description:
@@ -50,7 +52,7 @@ export const AGENT_REGISTRY = [
   {
     id: 'conversation',
     name: 'Conversation',
-    engine: 'dronahq',
+    engine: 'llm',
     callable: true,
     order: 5,
     description:
@@ -68,7 +70,7 @@ export const AGENT_REGISTRY = [
   {
     id: 'voice_sdr',
     name: 'Voice SDR',
-    engine: 'dronahq',
+    engine: 'llm',
     callable: false,
     order: 7,
     description:

@@ -1,11 +1,11 @@
 /**
  * The Agents screen.
  *
- * Two jobs: show what each agent actually did, and let someone fix a DronaHQ
- * webhook without leaving the app. The test call is the second one. The most
- * common failure in this stack is a webhook answering with a run
- * acknowledgement instead of output, and that is far easier to fix when the
- * deployed app names it than when the only evidence is a column of nulls.
+ * Two jobs: show what each agent actually did, and let someone check a Groq
+ * or Gemini key without leaving the app. The test call is the second one —
+ * a bad key, a rate limit, or a model answering with prose instead of JSON
+ * is far easier to fix when the deployed app names it than when the only
+ * evidence is a column of nulls.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
@@ -151,8 +151,8 @@ export default function Agents() {
 
   useEffect(() => { load(); }, [load]);
 
-  const onDronaHq = (agents ?? []).filter((a) => a.engine === 'dronahq').length;
-  const shouldBe = (agents ?? []).filter((a) => a.configured_engine === 'dronahq' && a.callable).length;
+  const onLlm = (agents ?? []).filter((a) => a.engine === 'llm_engine').length;
+  const shouldBe = (agents ?? []).filter((a) => a.configured_engine === 'llm' && a.callable).length;
 
   return (
     <>
@@ -168,12 +168,12 @@ export default function Agents() {
       <div className="content stack">
         <ConnectionBanner />
 
-        {agents && shouldBe > 0 && onDronaHq < shouldBe && (
+        {agents && shouldBe > 0 && onLlm < shouldBe && (
           <Banner tone="warn">
-            <b>{shouldBe - onDronaHq} of {shouldBe} agents are running on the built-in engine.</b>{' '}
-            The pipeline works and every result is labelled, but those agents have no DronaHQ webhook
-            configured or their last call did not return usable output. Open one and send a test call
-            to see which.
+            <b>{shouldBe - onLlm} of {shouldBe} agents are running on the built-in engine.</b>{' '}
+            The pipeline works and every result is labelled, but those agents have no Groq or Gemini
+            key configured or their last call did not return usable output. Open one and send a test
+            call to see which.
           </Banner>
         )}
 
@@ -224,7 +224,7 @@ export default function Agents() {
                       )}
 
                       <div className="row wrap" style={{ gap: 7 }}>
-                        {a.configured_engine === 'dronahq' && (
+                        {a.configured_engine === 'llm' && (
                           <button className="btn sm" onClick={() => setTesting(a)}>
                             <Icons.play size={12} /> Send a test call
                           </button>
@@ -245,12 +245,10 @@ export default function Agents() {
                         />
                       </div>
 
-                      {a.configured_engine === 'dronahq' && !a.dronahq_configured && a.env_names && (
+                      {a.configured_engine === 'llm' && !a.llm_configured && (
                         <div className="tiny muted">
-                          No webhook set. Add <code className="mono">{a.env_names.url}</code> and{' '}
-                          <code className="mono">{a.env_names.key}</code> (or a shared{' '}
-                          <code className="mono">{a.env_names.sharedKey}</code>) to the API
-                          environment.
+                          No key set. Add <code className="mono">GROQ_API_KEY</code> and/or{' '}
+                          <code className="mono">GEMINI_API_KEY</code> to the API environment.
                         </div>
                       )}
                     </>
@@ -283,7 +281,7 @@ export default function Agents() {
                 Read from the API environment, not from history. This is what the next call to each
                 agent will use. Fallback is{' '}
                 {routing.local_engine_enabled ? 'enabled' : 'disabled'}: when it is off, a failed
-                DronaHQ call stops the step instead of being answered locally.
+                Groq/Gemini call stops the step instead of being answered locally.
               </Note>
             </div>
           </div>

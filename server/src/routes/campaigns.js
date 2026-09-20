@@ -73,6 +73,7 @@ router.get('/', asyncHandler(async (req, res) => {
           ['contacted', 'engaged', 'meeting', 'opportunity'].includes(m.state)
         ).length,
         replied_count: mine.filter((m) => ['engaged', 'meeting', 'opportunity'].includes(m.state)).length,
+        meetings_count: mine.filter((m) => ['meeting', 'opportunity'].includes(m.state)).length,
         pending_count: mine.filter((m) => ['discovered', 'researched', 'qualified', 'strategy_planned'].includes(m.state)).length,
       });
     })
@@ -184,6 +185,82 @@ router.post('/:id/run', asyncHandler(async (req, res) => {
 
   const result = await runCampaign(req.params.id, { limit, force });
   res.json(result);
+}));
+
+/**
+ * POST /campaigns/:id/duplicate
+ *
+ * Clones the campaign's own configuration — targeting, policy, prompts — into
+ * a new draft. Nothing about prospects, activity or history comes along: a
+ * variant is a fresh start built on the same instructions, not a copy of the
+ * original's progress. This is what lets a team run "Campaign A" against
+ * "Campaign A: Personalisation Variant B" and compare response rates.
+ */
+router.post('/:id/duplicate', asyncHandler(async (req, res) => {
+  const source = unwrapSoft(
+    await supabase.from('campaigns').select('*').eq('id', req.params.id).maybeSingle(),
+    null,
+    'campaigns'
+  );
+  if (!source) throw notFound('No such campaign');
+
+  const name = (req.body?.name ?? `${source.name} (copy)`).trim();
+
+  const clone = {
+    name,
+    status: 'draft',
+    objective: source.objective,
+    icp_criteria: source.icp_criteria,
+    exclusion_criteria: source.exclusion_criteria,
+    target_roles: source.target_roles,
+    industry: source.industry,
+    company_size: source.company_size,
+    sample_profiles: source.sample_profiles,
+    enabled_channels: source.enabled_channels,
+    outreach_policy: source.outreach_policy,
+    messaging_policy: source.messaging_policy,
+    research_focus: source.research_focus,
+    working_hours: source.working_hours,
+    daily_send_limit: source.daily_send_limit,
+    require_approval: source.require_approval,
+    rep_id: source.rep_id,
+  };
+
+  const { data, error } = await supabase.from('campaigns').insert(clone).select('*, reps(*)').single();
+  if (error) throw new Error(`campaign duplicate: ${error.message}`);
+
+  const prompts = unwrapSoft(
+    await supabase
+      .from('prompt_versions')
+      .select('agent_name, content, author')
+      .eq('campaign_id', req.params.id)
+      .eq('is_active', true),
+    [],
+    'prompt_versions'
+  );
+
+  if (prompts.length > 0) {
+    await supabase.from('prompt_versions').insert(
+      prompts.map((p) => ({
+        campaign_id: data.id,
+        agent_name: p.agent_name,
+        version: 1,
+        is_active: true,
+        author: p.author,
+        content: p.content,
+      }))
+    );
+  }
+
+  await logActivity({
+    campaignId: data.id,
+    agentName: 'system',
+    action: 'Duplicated a campaign',
+    detail: `Created from "${source.name}", starting in draft with ${prompts.length} active prompt(s) carried over.`,
+    status: 'success',
+  });
+
+  res.status(201).json(mapCampaign(data, { prospect_count: 0, qualified_count: 0, contacted_count: 0, replied_count: 0, meetings_count: 0, pending_count: 0 }));
 }));
 
 /** GET /campaigns/:id/prompts — active prompt per agent. */

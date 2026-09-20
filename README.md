@@ -2,9 +2,9 @@
 
 Outbound prospecting run by agents, with a person in the loop and four ways to stop it.
 
-Five DronaHQ agents research a prospect, score them against a written ICP, plan a sequence, write each message and read replies. A sixth decides timing deterministically. Everything a human has to look at lands in one queue.
+Five agents — running on Groq, then Gemini — research a prospect, score them against a written ICP, plan a sequence, write each message and read replies. A sixth decides timing deterministically. Everything a human has to look at lands in one queue.
 
-Built for the Inter Guild Buildathon 2026 (IIT Madras × DronaHQ).
+Built for the Inter Guild Buildathon 2026 (IIT Madras × DronaHQ). DronaHQ was the original plan for the intelligence layer, per the brief: it was wired, all five agents configured and tested, and dropped once every one of them answered in Background mode (a run acknowledgement, never the model's actual output) — a platform-side setting, not something fixable from this side. Rather than ship an integration that silently produces nothing, the intelligence layer runs on Groq and Gemini directly. See [§6](#6-the-llm-engine) for what that decision cost and what it bought.
 
 ---
 
@@ -15,7 +15,7 @@ Built for the Inter Guild Buildathon 2026 (IIT Madras × DronaHQ).
 3. [The six decisions that shape it](#3-the-six-decisions-that-shape-it)
 4. [What works, what is partial, what is not built](#4-what-works-what-is-partial-what-is-not-built)
 5. [Deploying it](#5-deploying-it)
-6. [The DronaHQ agents](#6-the-dronahq-agents)
+6. [The LLM engine](#6-the-llm-engine)
 7. [Running it locally](#7-running-it-locally)
 8. [Environment variables](#8-environment-variables)
 9. [Folder structure](#9-folder-structure)
@@ -53,7 +53,7 @@ A person approves anything that goes out. Four independent switches stop it.
        │  reads the API only       │                             │
        │                           │                             │
        │                           ▼
-       │                      DronaHQ webhooks
+       │                      LLM engine — Groq, then Gemini
        │                      ┌─────────────────────────────┐
        │                      │ research                    │
        │                      │ icp_fitment                 │
@@ -61,8 +61,8 @@ A person approves anything that goes out. Four independent switches stop it.
        │                      │ personalisation             │
        │                      │ conversation                │
        │                      └─────────────────────────────┘
-       │                           │ fails, times out, or
-       │                           │ returns nothing usable
+       │                           │ not configured, or every
+       │                           │ configured provider fails
        │                           ▼
        │                      Local engine (deterministic)
        │                      every run labelled with the
@@ -95,13 +95,13 @@ Every arrow passes the gate first. The gate is one function, called from one pla
 
 | Agent | Engine | Built | What it decides |
 |---|---|---|---|
-| Research & Enrichment | DronaHQ | yes | What is known about this person, and what is not |
-| ICP Fitment | DronaHQ | yes | qualify, reject, or needs_review |
-| Outreach Strategy | DronaHQ | yes | Whether to contact at all, and the sequence if so |
-| Personalisation | DronaHQ | yes | The message, or a refusal to write one |
-| Conversation | DronaHQ | yes | What a reply means and what happens next |
+| Research & Enrichment | Groq → Gemini | yes | What is known about this person, and what is not |
+| ICP Fitment | Groq → Gemini | yes | qualify, reject, or needs_review |
+| Outreach Strategy | Groq → Gemini | yes | Whether to contact at all, and the sequence if so |
+| Personalisation | Groq → Gemini | yes | The message, or a refusal to write one |
+| Conversation | Groq → Gemini | yes | What a reply means and what happens next |
 | Follow-up Timing | ours | yes | When the next touch goes out |
-| Voice SDR | DronaHQ | **no** | Planned and gated, not implemented |
+| Voice SDR | Groq → Gemini | **no** | Planned and gated, not implemented |
 
 Follow-up timing is deterministic on purpose. Working hours, weekends and the gap since the last touch are arithmetic; a model would only add variance to a calculation that has one right answer.
 
@@ -113,7 +113,7 @@ Follow-up timing is deterministic on purpose. Working hours, weekends and the ga
 
 **Not sure is a first-class answer.** `needs_review` sits beside `qualify` and `reject`. A prospect the system cannot place is different from one who does not fit, and collapsing them either loses good prospects or emails bad ones.
 
-**A fallback that hides itself is worse than no fallback.** When a DronaHQ call fails, the deterministic local engine answers, and the run is written with `engine = 'local_engine'`. Every screen badges it. The agent performance numbers are counted from those rows.
+**A fallback that hides itself is worse than no fallback.** When Groq and Gemini both fail, the deterministic local engine answers, and the run is written with `engine = 'local_engine'`. Every screen badges it. The agent performance numbers are counted from those rows.
 
 **Nothing unsourced goes out.** Every claim about a prospect must come from a field in the research; every claim about the product from a chunk in the knowledge base. With nothing specific to say, the agent sets `needs_human` and the message goes to the queue instead.
 
@@ -127,7 +127,7 @@ Follow-up timing is deterministic on purpose. Working hours, weekends and the ga
 
 ### Fully working
 
-- All five DronaHQ agents, with envelope unwrapping, coercion, schema validation, one retry carrying the error back to the agent, and a deterministic fallback.
+- All five intelligence agents, running on Groq then Gemini, with coercion, schema validation, one retry carrying the error back to the model, and a deterministic fallback.
 - Three-state ICP verdict, with exclusions evaluated before scoring.
 - Per-campaign isolation, visible on the prospect page as two verdicts side by side.
 - Sequence planning across enabled channels, with a stated touch count respected and weekends handled.
@@ -152,6 +152,7 @@ Follow-up timing is deterministic on purpose. Working hours, weekends and the ga
 - **Voice.** Registered, gated through the same stop controls and suppression checks, and it runs nothing. The Agents screen says "not built" rather than showing an idle tile that implies otherwise.
 - **CSV import.** Prospects are added one at a time or through the seed file.
 - **Multi-tenant.** One workspace.
+- **DronaHQ, deliberately.** It was the original plan for the intelligence layer and was fully wired and tested — all five agents, correct webhook shapes, correct payloads. Every one answered in Background mode (a run acknowledgement, never the output), which is a setting on DronaHQ's side and not fixable from this codebase. Rather than ship an integration that silently produces nothing, the intelligence layer runs on Groq and Gemini instead. See [§6](#6-the-llm-engine).
 
 ---
 
@@ -220,45 +221,34 @@ If either is wrong, the response names the missing variable or the absent table.
 
 3. Railway redeploys. Open your Vercel URL. The sidebar should say **API connected**.
 
-### Step 5 · DronaHQ agents
+### Step 5 · The LLM engine
 
-Optional to get a working site, expected for a full one. See the next section.
+Required to get a fully working site rather than one running on the deterministic fallback. See the next section — it is two environment variables, not a platform to configure.
 
 ---
 
-## 6. The DronaHQ agents
+## 6. The LLM engine
 
-Every agent is called the same way: one POST to its webhook URL.
+### Why not DronaHQ
 
-```
-Content-Type: application/json
-Accept: application/json
-api-key: <your key>
-Authorization: Bearer <your key>
-```
+DronaHQ was the original plan for the intelligence layer, per the brief. All five agents were wired against real DronaHQ webhooks — correct payload shapes, correct headers, per-campaign `_system_prompt` / `_agent_prompt` carried through. Every one of them answered in Background mode: `{"run_id": ..., "thread_id": ...}` instead of the model's actual output. That is a setting on the DronaHQ side (Webhook trigger → Configure Response → Background vs Standard) and cannot be fixed from outside DronaHQ. Rather than ship an integration that demos as "connected" while silently producing nothing, the intelligence layer calls Groq and Gemini directly instead. The DronaHQ transport code was removed, not disabled — `server/src/agents/dronahq.js` no longer exists, and nothing in the codebase calls out to DronaHQ.
 
-Two fields are on every call whatever the agent: `_system_prompt` and `_agent_prompt`, carrying the campaign's own wording from the prompt editor. Keep the DronaHQ instruction about output shape and the rules that never change, and have it defer to those two when present. That is what makes the in-app prompt editor change behaviour rather than store text.
+### How it works
 
-### The one setting that matters
-
-On each agent's Webhook trigger, open **Configure Response** and switch the response type from **Background** to **Standard**, then paste the agent's output JSON Schema, then **save and publish**.
-
-Background mode answers with `{"run_id": ..., "thread_id": ...}` instead of the agent's output. That is the null-value problem, and it cannot be fixed from outside DronaHQ. The API detects it explicitly and says so.
+`server/src/agents/llmEngine.js` builds one prompt per agent — a role description, the exact JSON shape expected, and the campaign's own `_system_prompt` / `_agent_prompt` from the prompt editor — and calls Groq, then Gemini, in the order named by `LLM_PROVIDER_ORDER`. `GROQ_API_KEY` may hold more than one key, comma separated: a rate-limited or rejected first key falls through to a second one before the pipeline ever tries Gemini. The response is validated through the identical schema and coercion every agent's output goes through, so a malformed answer from either provider is caught exactly the same way a malformed DronaHQ response would have been. Leave both `GROQ_API_KEY` and `GEMINI_API_KEY` blank and the pipeline runs on the deterministic local engine instead — nothing crashes, every run just says which engine produced it.
 
 ### Variables
 
 ```
-DRONAHQ_API_KEY              one key for all five
-DRONAHQ_RESEARCH_URL
-DRONAHQ_ICP_URL              note: ICP, not ICP_FITMENT
-DRONAHQ_STRATEGY_URL         note: STRATEGY, not OUTREACH_STRATEGY
-DRONAHQ_PERSONALISATION_URL
-DRONAHQ_CONVERSATION_URL
+GROQ_API_KEY          one or more, comma separated
+GROQ_MODEL            default llama-3.3-70b-versatile
+GEMINI_API_KEY
+GEMINI_MODEL           default gemini-3.6-flash
+LLM_PROVIDER_ORDER     default groq,gemini
+LLM_TIMEOUT_MS         default 30000
 ```
 
-Per-agent keys (`DRONAHQ_RESEARCH_KEY` and so on) override the shared one when an agent needs its own.
-
-Partial is fine. Each agent checks its own URL and key independently, so one configured agent runs on DronaHQ while the rest stay on the built-in engine, and the app shows which is which.
+Partial is fine. Set only one provider's key and the other is simply never tried.
 
 ### Checking it
 
@@ -266,20 +256,19 @@ Open the deployed app, go to **Agents**, click **Send a test call**. It fires on
 
 | Result | What to do |
 |---|---|
-| Responded with valid output | Done. The badge turns from Fallback to DronaHQ. |
-| Background-run acknowledgement | Configure Response is still on Background, or the agent was not published. |
-| Not configured | The URL or key variable is missing or misspelled in Railway. |
-| Did not match the expected schema | It answered with the wrong shape. Expand the raw response and compare. Usually one field name or one enum spelling. |
-| Not JSON | It wrapped the answer in markdown fences. Add "Return JSON only" to the instruction. |
+| Responded with valid output | Done. The badge turns from Fallback to `AI (Groq/Gemini)`. |
+| Not configured | Neither `GROQ_API_KEY` nor `GEMINI_API_KEY` is set in Railway. |
+| Did not match the expected schema | The model answered with the wrong shape. Expand the raw response and compare. Usually one field name or one enum spelling. |
+| Every provider failed | Expand the error — it lists each provider's own reason. Almost always an invalid or rate-limited key; check the raw HTTP status in the message. |
 
 `GET /agents/routing` returns which engine each of the five will use right now.
 
 ### What happens when an agent misbehaves
 
-1. The response is unwrapped from any of a dozen envelope shapes: `response`, `output`, `result`, `data`, stringified JSON, markdown fences, prose around JSON, single-element arrays.
+1. The response is parsed loosely (a model asked for JSON only can still wrap it in markdown fences or a sentence of preamble).
 2. It is reshaped: numbers as strings, arrays as stringified JSON, alternate field names, `"qualified"` for `"qualify"`.
-3. It is validated. If every load-bearing field is null, that is the "returned nulls" case and is treated as a failure rather than written as an empty record.
-4. One retry, with the validation error appended to the payload so the agent is told what was wrong.
+3. It is validated. If every load-bearing field is null, that is treated as a failure rather than written as an empty record.
+4. One retry, with the validation error appended to the prompt so the model is told what was wrong.
 5. The local engine answers, and the run is recorded as `degraded` with `engine = 'local_engine'`.
 
 ---
@@ -320,8 +309,12 @@ Node 22 or later. Node 20 works because `server/src/db/client.js` supplies a Web
 | `CORS_ORIGINS` | yes in production | localhost | Comma separated, no trailing slashes |
 | `HOST` | no | `0.0.0.0` | Must not be localhost on Railway |
 | `PORT` | no | `3001` | Do not set on Railway |
-| `DRONAHQ_API_KEY` | no | | Shared key for all five agents |
-| `DRONAHQ_*_URL` | no | | One per agent; absent means the local engine |
+| `GROQ_API_KEY` | no | | The intelligence layer, tried first. Comma-separate more than one key. |
+| `GROQ_MODEL` | no | `llama-3.3-70b-versatile` | |
+| `GEMINI_API_KEY` | no | | Tried second, or first if Groq is not set |
+| `GEMINI_MODEL` | no | `gemini-3.6-flash` | |
+| `LLM_PROVIDER_ORDER` | no | `groq,gemini` | Comma list; only entries with a key set are tried |
+| `LLM_TIMEOUT_MS` | no | `30000` | |
 | `WORKER_ENABLED` | no | `false` | Advance prospects without anyone watching |
 | `WORKER_POLL_MS` | no | `30000` | |
 | `WORKER_BATCH_SIZE` | no | `5` | |
@@ -346,14 +339,17 @@ Node 22 or later. Node 20 works because `server/src/db/client.js` supplies a Web
 │   │   └── index.js                 one function per endpoint
 │   ├── lib/auth.js                  Supabase auth only; never reads data
 │   ├── context/AppContext.jsx       user, connection, campaigns, queue, polling
-│   ├── components/ui.jsx            shared primitives
+│   ├── components/
+│   │   ├── ui.jsx                   shared primitives
+│   │   └── NewCampaign.jsx          the create-campaign modal
 │   └── pages/
 │       ├── Login.jsx
+│       ├── Dashboard.jsx            every campaign at a glance, real counts only
 │       ├── Queue.jsx                home: pipeline, approvals, history
 │       ├── Prospects.jsx            list, one row per prospect per campaign
 │       ├── ProspectDetail.jsx       verdicts, timeline, thread, profile, runs
-│       ├── Campaigns.jsx            targeting, execution, prompt editor
-│       ├── Agents.jsx               status, runs, the DronaHQ test call
+│       ├── Campaigns.jsx            targeting, execution, prompt editor, lifecycle
+│       ├── Agents.jsx               status, runs, the Groq/Gemini test call
 │       ├── Knowledge.jsx            chunks and the retrieval preview
 │       └── Controls.jsx             four levels of stopping, suppression
 └── server/
@@ -361,20 +357,22 @@ Node 22 or later. Node 20 works because `server/src/db/client.js` supplies a Web
     ├── railway.json                 start command and health check
     ├── db/
     │   ├── 01-schema.sql            12 tables, from empty
-    │   └── 02-seed.sql              starting state, no fake history
-    ├── scripts/verify.js            87 offline checks
+    │   ├── 02-seed.sql              starting state, no fake history
+    │   └── 03-add-llm-engine.sql    migration for a database created before llm_engine existed
+    ├── scripts/verify.js            75 offline checks
     └── src/
         ├── index.js                 express app and boot report
         ├── config.js                every env var, declared once
         ├── worker.js                optional background advance
         ├── db/client.js             supabase client, soft error handling
         ├── lib/http.js              async handler and error shapes
+        ├── lib/json.js              loose JSON parsing for model output
         ├── agents/
         │   ├── registry.js          the seven agents
-        │   ├── dronahq.js           transport, envelopes, async detection
+        │   ├── llmEngine.js         Groq/Gemini transport and per-agent prompts
         │   ├── schemas.js           coercion and zod schemas per agent
         │   ├── localEngine.js       the deterministic fallback
-        │   └── client.js            callAgent and probeAgent
+        │   └── client.js            callAgent: LLM engine → local engine
         ├── orchestrator/
         │   ├── gate.js              the four stops plus suppression
         │   └── index.js             advance, replies, runCampaign
@@ -383,7 +381,7 @@ Node 22 or later. Node 20 works because `server/src/db/client.js` supplies a Web
         │   ├── knowledge.js         lexical retrieval
         │   ├── metrics.js           everything counted from tables
         │   └── mappers.js           rows to API shapes
-        └── routes/                  health, queue, campaigns, prospects,
+        └── routes/                  health, queue, campaigns, prospects, reps,
                                      agents, knowledge, controls
 ```
 
@@ -395,11 +393,10 @@ Node 22 or later. Node 20 works because `server/src/db/client.js` supplies a Web
 npm --prefix server run check
 ```
 
-87 offline checks, no network and no database. They cover the registry, all twelve envelope shapes, async-acknowledgement detection, coercion of every field type, empty-output detection per agent, and the local engine's scoring, exclusions, sequence planning, message writing and reply classification.
+75 offline checks, no network and no database. They cover the registry, loose JSON parsing, coercion of every field type, empty-output detection per agent, and the local engine's scoring, exclusions, sequence planning, message writing and reply classification.
 
 Every assertion is there because the behaviour broke at least once during the build. A few worth naming:
 
-- `icp_fitment` reads `DRONAHQ_ICP_URL`, not `DRONAHQ_ICP_FITMENT_URL`. Deriving the name from the agent id told people to set a variable that does nothing.
 - A geographic exclusion ("outside India") must not reject Indian prospects.
 - A full title must match an abbreviated target role. A CIO campaign was scoring actual CIOs as a mismatch.
 - A campaign's stated touch count must be respected. Writing "two touches" and getting four teaches an operator that the field is decoration.
@@ -448,7 +445,7 @@ Nothing is stored, incremented or cached. Every figure is counted from rows when
 
 - The Supabase **service_role** key lives only in the API environment. It is never sent to the browser, never in a `VITE_` variable, never in the repository. If it leaks, anyone can read and write the whole database.
 - The browser sees only the **anon** key, and only for sign-in. No screen reads application data from Supabase directly.
-- The API is the only component holding DronaHQ credentials.
+- The API is the only component holding Groq/Gemini credentials.
 - `.env` is gitignored. Check your repository has no `.env` anywhere; if it does, delete it and rotate the key.
 - Only an allow-list of columns can be written through the campaigns API.
 - Exclusions are enforced with SQL predicates, never by asking a model to remember.
@@ -460,7 +457,7 @@ Nothing is stored, incremented or cached. Every figure is counted from rows when
 
 - **Nothing is actually delivered.** Approving a message records it as sent. There is no provider behind it.
 - **Retrieval is lexical.** Term overlap, not meaning. A chunk that says the same thing in different words will not be found.
-- **The local engine is rule-based and shallow.** It reasons over fields already in the record and never invents. Without DronaHQ configured, research adds derivation rather than discovery, and scoring works from firmographics rather than judgement. Every such run is labelled Fallback.
+- **The local engine is rule-based and shallow.** It reasons over fields already in the record and never invents. Without a Groq or Gemini key configured, research adds derivation rather than discovery, and scoring works from firmographics rather than judgement. Every such run is labelled Fallback.
 - **Cost is an estimate** until a provider reports real token usage.
 - **One workspace.** No tenancy, no roles. Anyone signed in can do anything.
 - **The worker is not distributed.** One process polls. Two API instances would both pick up the same due prospects.

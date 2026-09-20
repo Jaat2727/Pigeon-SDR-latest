@@ -25,6 +25,7 @@ const ico = (d, extra) => (props) => (
 );
 
 export const Icons = {
+  activity: ico('M22 12h-4l-3 9L9 3l-3 9H2'),
   queue: ico('M3 5h18M3 12h18M3 19h12'),
   people: ico('M16 20v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1', <circle key="c" cx="9.5" cy="7" r="3.2" />),
   target: ico('M12 3v3M12 18v3M3 12h3M18 12h3', <circle key="c" cx="12" cy="12" r="5" />),
@@ -81,12 +82,13 @@ export const channelLabel = (c) => CHANNEL_LABEL[c] ?? c;
 export const StateTag = ({ state }) => <Pill tone={STATE_TONE[state] ?? 'grey'}>{labelOf(state)}</Pill>;
 
 /**
- * Which engine produced a result. Three states, never two: a fallback that
- * looks like a model call is the one thing this badge exists to prevent.
+ * Which engine produced a result. Never blurred together: a fallback that
+ * looks like a real model call is the one thing this badge exists to
+ * prevent.
  */
 export function EngineTag({ engine }) {
   const map = {
-    dronahq: { tone: 'blue', label: 'DronaHQ' },
+    llm_engine: { tone: 'violet', label: 'AI (Groq/Gemini)' },
     local_engine: { tone: 'warn', label: 'Fallback' },
     our_engine: { tone: 'grey', label: 'Rule-based' },
   };

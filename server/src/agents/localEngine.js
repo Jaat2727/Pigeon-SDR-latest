@@ -1,7 +1,7 @@
 /**
- * Local engine — the deterministic fallback that runs when DronaHQ is not
- * configured for an agent, times out, errors, or returns a response whose
- * load-bearing fields are all null.
+ * Local engine — the deterministic fallback that runs when the LLM engine
+ * (Groq/Gemini) is not configured for an agent, times out, errors, or
+ * returns a response whose load-bearing fields are all null.
  *
  * Its job is to keep the pipeline moving and to make the failure visible rather
  * than silent. Three rules hold throughout:

@@ -3,9 +3,9 @@
  *
  * Two passes run over every agent response:
  *
- *   1. `coerce*` reshapes whatever came back into the shape we expect. DronaHQ
+ *   1. `coerce*` reshapes whatever came back into the shape we expect. A model
  *      returns strings for numbers, stringified JSON for arrays and objects,
- *      and nulls for fields the model could not fill. All of that is normal and
+ *      and nulls for fields it could not fill. All of that is normal and
  *      recoverable, so it is handled here rather than treated as a failure.
  *   2. The zod schema then validates the coerced object. It only fails when a
  *      field the pipeline genuinely cannot proceed without is absent — the
@@ -442,9 +442,9 @@ function readPath(obj, path) {
 }
 
 /**
- * True when every load-bearing field is null/empty — the exact symptom of a
- * DronaHQ agent whose webhook response is not configured or whose model
- * returned an empty object.
+ * True when every load-bearing field is null/empty — the exact symptom of an
+ * unconfigured or malfunctioning model call, one that answered with an
+ * empty object rather than real output.
  */
 export function isEmptyOutput(agentName, coerced) {
   const spec = AGENT_SCHEMAS[agentName];

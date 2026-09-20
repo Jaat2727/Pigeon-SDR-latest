@@ -243,7 +243,7 @@ create table if not exists agent_runs (
   prospect_id         uuid references prospects(id) on delete set null,
 
   agent_name          text not null,
-  engine              text not null check (engine in ('dronahq', 'local_engine', 'our_engine')),
+  engine              text not null check (engine in ('dronahq', 'llm_engine', 'local_engine', 'our_engine')),
   status              text not null check (status in ('success', 'degraded', 'failed')),
 
   input               jsonb,

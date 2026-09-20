@@ -20,6 +20,7 @@ import prospectRoutes from './routes/prospects.js';
 import agentRoutes from './routes/agents.js';
 import knowledgeRoutes from './routes/knowledge.js';
 import controlRoutes from './routes/controls.js';
+import repRoutes from './routes/reps.js';
 
 import { startWorker } from './worker.js';
 
@@ -75,6 +76,7 @@ app.use('/prospects', prospectRoutes);
 app.use('/agents', agentRoutes);
 app.use('/knowledge', knowledgeRoutes);
 app.use('/controls', controlRoutes);
+app.use('/reps', repRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

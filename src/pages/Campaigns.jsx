@@ -4,8 +4,37 @@ import { ConnectionBanner } from '../App.jsx';
 import * as api from '../api/index.js';
 import { friendlyError } from '../api/client.js';
 import {
-  ActionButton, Banner, Empty, Icons, Loading, Modal, Note, Pill, Toggle, when,
+  ActionButton, Banner, Empty, EngineTag, Icons, Loading, Modal, Note, Pill, Pipeline, Toggle, when,
 } from '../components/ui.jsx';
+import NewCampaign from '../components/NewCampaign.jsx';
+
+function ActivityFeed({ items }) {
+  if (items.length === 0) {
+    return <Empty title="Nothing has happened yet" sub="Press Run and every real step lands here." />;
+  }
+  return (
+    <div className="feed">
+      {items.map((a) => (
+        <div className="feed-item" key={a.id}>
+          <div className="feed-rail"><i className={`feed-dot ${a.status}`} /></div>
+          <div className="feed-main">
+            <div className="feed-top">
+              <span className="feed-action">{a.action}</span>
+              {a.engine && <EngineTag engine={a.engine} />}
+            </div>
+            {a.detail && <div className="feed-detail">{a.detail}</div>}
+            <div className="feed-meta">
+              <span>{a.actor}</span>
+              {a.prospect_name && <><span>·</span><span>{a.prospect_name}</span></>}
+              <span>·</span>
+              <span>{when(a.created_at)}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const CHANNELS = ['email', 'linkedin', 'sms', 'voice'];
 
@@ -18,14 +47,20 @@ const PROMPT_AGENTS = [
   ['conversation', 'Conversation', 'How to read replies and what always needs a person.'],
 ];
 
-function Editor({ campaign, onClose, onSaved }) {
+function Editor({ campaign, onClose, onSaved, initialTab = 'targeting' }) {
   const { actor } = useApp();
-  const [tab, setTab] = useState('targeting');
-  const [form, setForm] = useState(campaign);
+  const [tab, setTab] = useState(initialTab);
+  const [form, setForm] = useState({ ...campaign, rep_id: campaign.rep?.id ?? '' });
   const [prompts, setPrompts] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(null);
+  const [reps, setReps] = useState(null);
+  const [newRepName, setNewRepName] = useState('');
+  const [activity, setActivity] = useState(null);
+  const [funnel, setFunnel] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [runNotice, setRunNotice] = useState(null);
 
   useEffect(() => {
     api.getPrompts(campaign.id)
@@ -35,6 +70,62 @@ function Editor({ campaign, onClose, onSaved }) {
       })
       .catch((err) => setError(friendlyError(err)));
   }, [campaign.id]);
+
+  const loadReps = useCallback(() => {
+    api.listReps().then(setReps).catch(() => setReps([]));
+  }, []);
+
+  useEffect(() => { loadReps(); }, [loadReps]);
+
+  const loadActivity = useCallback(async () => {
+    try {
+      const [detail, feed] = await Promise.all([
+        api.getCampaign(campaign.id),
+        api.getActivity({ campaignId: campaign.id, limit: 60 }),
+      ]);
+      setFunnel(detail.funnel);
+      setActivity(feed);
+    } catch (err) {
+      setError(friendlyError(err));
+    }
+  }, [campaign.id]);
+
+  useEffect(() => {
+    if (tab === 'activity') loadActivity();
+  }, [tab, loadActivity]);
+
+  const run = async () => {
+    setRunning(true);
+    setRunNotice(null);
+    setError(null);
+    try {
+      const res = await api.runCampaign(campaign.id, { limit: 25 });
+      setRunNotice(
+        res.picked_up === 0
+          ? 'Nothing was due — every prospect is already at a checkpoint that needs a person, or scheduled for later.'
+          : `Picked up ${res.picked_up} prospect${res.picked_up === 1 ? '' : 's'} and advanced ${res.advanced}. Everything below is from that run.`
+      );
+      await loadActivity();
+      await onSaved();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const addRep = async () => {
+    if (!newRepName.trim()) return;
+    setError(null);
+    try {
+      const rep = await api.createRep({ full_name: newRepName.trim() });
+      setNewRepName('');
+      loadReps();
+      setForm((f) => ({ ...f, rep_id: rep.id }));
+    } catch (err) {
+      setError(friendlyError(err));
+    }
+  };
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -62,6 +153,7 @@ function Editor({ campaign, onClose, onSaved }) {
         research_focus: form.research_focus,
         daily_send_limit: Number(form.daily_send_limit) || 0,
         require_approval: form.require_approval,
+        rep_id: form.rep_id || null,
       });
       setSaved('Settings saved. They apply to the next run.');
       await onSaved();
@@ -85,13 +177,51 @@ function Editor({ campaign, onClose, onSaved }) {
   return (
     <Modal title={campaign.name} onClose={onClose} wide>
       <div className="tabs" style={{ marginBottom: 14 }}>
-        {[['targeting', 'Targeting'], ['execution', 'Execution'], ['prompts', 'Prompts']].map(([k, l]) => (
+        {[['activity', 'Activity'], ['targeting', 'Targeting'], ['execution', 'Execution'], ['prompts', 'Prompts']].map(([k, l]) => (
           <button key={k} className={`tab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
 
       {error && <Banner tone="stop">{error}</Banner>}
       {saved && <Banner tone="info">{saved}</Banner>}
+      {runNotice && <Banner tone="info">{runNotice}</Banner>}
+
+      {tab === 'activity' && (
+        <div className="stack-sm">
+          <div className="row">
+            <span className="small dim">
+              Every line below is written by a real run — nothing here is typed in ahead of time.
+            </span>
+            <div className="spacer" />
+            <ActionButton
+              className="btn primary sm"
+              onClick={run}
+              disabled={running || campaign.status !== 'live'}
+              title={campaign.status !== 'live' ? 'Set this campaign live first' : 'Advance every prospect that has something to do'}
+            >
+              {running ? <span className="spin" /> : <Icons.play size={13} />} Run this campaign
+            </ActionButton>
+          </div>
+
+          {campaign.status !== 'live' && (
+            <Note>This campaign is {campaign.status}. Set it live to run it — a paused or draft campaign accepts no autonomous action, by design.</Note>
+          )}
+
+          {!funnel ? (
+            <Loading label="Loading activity" />
+          ) : (
+            <>
+              <Pipeline funnel={funnel} />
+              <div className="panel">
+                <div className="panel-head"><h3>History</h3></div>
+                <div className="panel-body tight">
+                  <ActivityFeed items={activity ?? []} />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {tab === 'targeting' && (
         <div className="stack-sm">
@@ -173,6 +303,30 @@ function Editor({ campaign, onClose, onSaved }) {
             <textarea className="textarea" rows={2} value={form.research_focus ?? ''} onChange={set('research_focus')} />
           </div>
 
+          <div className="field">
+            <label className="label">Rep (whose identity outreach is sent as)</label>
+            <div className="row" style={{ gap: 6 }}>
+              <select className="select" value={form.rep_id ?? ''} onChange={set('rep_id')} style={{ flex: 1 }}>
+                <option value="">Unassigned</option>
+                {(reps ?? []).map((r) => (
+                  <option key={r.id} value={r.id}>{r.full_name}{r.title ? ` · ${r.title}` : ''}</option>
+                ))}
+              </select>
+            </div>
+            <div className="row" style={{ gap: 6, marginTop: 6 }}>
+              <input
+                className="input"
+                placeholder="Add a new rep by name"
+                value={newRepName}
+                onChange={(e) => setNewRepName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addRep()}
+                style={{ flex: 1 }}
+              />
+              <ActionButton className="btn sm" onClick={addRep} disabled={!newRepName.trim()}>Add</ActionButton>
+            </div>
+            <span className="hint">Messages this campaign drafts are signed as this rep. Save execution to apply a change.</span>
+          </div>
+
           <div className="grid grid-2">
             <div className="field">
               <label className="label">Daily send limit</label>
@@ -246,14 +400,47 @@ function Editor({ campaign, onClose, onSaved }) {
 }
 
 export default function Campaigns() {
-  const { campaigns, refresh, setError, connection } = useApp();
-  const [editing, setEditing] = useState(null);
+  const { campaigns, refresh, setError, connection, actor } = useApp();
+  const [editing, setEditing] = useState(null); // { campaign, tab }
+  const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(null);
+  const [runNotice, setRunNotice] = useState(null);
+
+  const run = useCallback(async (c) => {
+    setBusy(c.id);
+    setRunNotice(null);
+    try {
+      const res = await api.runCampaign(c.id, { limit: 25 });
+      setRunNotice({
+        id: c.id,
+        text: res.picked_up === 0
+          ? 'Nothing was due right now.'
+          : `Picked up ${res.picked_up}, advanced ${res.advanced}. Click the name to see everything it did.`,
+      });
+      await refresh();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh, setError]);
 
   const setStatus = useCallback(async (c, status) => {
     setBusy(c.id);
     try {
       await api.updateCampaign(c.id, { status });
+      await refresh();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh, setError]);
+
+  const duplicate = useCallback(async (c) => {
+    setBusy(c.id);
+    try {
+      await api.duplicateCampaign(c.id);
       await refresh();
     } catch (err) {
       setError(friendlyError(err));
@@ -269,34 +456,76 @@ export default function Campaigns() {
           <div className="page-title">Campaigns</div>
           <div className="page-sub">Who to target, who never to touch, and how to speak</div>
         </div>
+        <div className="spacer" />
+        <button className="btn primary" onClick={() => setCreating(true)}>
+          <Icons.plus size={13} /> New campaign
+        </button>
       </div>
 
       <div className="content stack">
         <ConnectionBanner />
 
         {campaigns.length === 0 && connection === 'connected' && (
-          <div className="panel"><Empty title="No campaigns" sub="Run the seed file against your Supabase project to get three." /></div>
+          <div className="panel">
+            <Empty
+              title="No campaigns"
+              sub="Create one, or run the seed file against your Supabase project to get three."
+              action={<button className="btn primary" onClick={() => setCreating(true)}><Icons.plus size={13} /> New campaign</button>}
+            />
+          </div>
         )}
 
         {campaigns.map((c) => (
           <div className="panel" key={c.id}>
             <div className="panel-head">
-              <Pill tone={c.status === 'live' ? 'ok' : c.status === 'paused' ? 'warn' : 'grey'} dot>
+              <Pill tone={c.status === 'live' ? 'ok' : c.status === 'paused' ? 'warn' : c.status === 'archived' ? 'grey' : 'line'} dot>
                 {c.status}
               </Pill>
-              <h2>{c.name}</h2>
+              <h2
+                className="clickable"
+                style={{ cursor: 'pointer' }}
+                onClick={() => setEditing({ campaign: c, tab: 'activity' })}
+                title="See what this campaign has actually done"
+              >
+                {c.name}
+              </h2>
               <div className="spacer" />
               <div className="row wrap" style={{ gap: 5 }}>
                 {c.enabled_channels.map((ch) => <Pill tone="line" key={ch}>{ch}</Pill>)}
               </div>
-              <button className="btn sm" onClick={() => setEditing(c)}>Edit</button>
-              <button
-                className={`btn sm ${c.status === 'live' ? '' : 'primary'}`}
-                disabled={busy === c.id}
-                onClick={() => setStatus(c, c.status === 'live' ? 'paused' : 'live')}
-              >
-                {busy === c.id ? <span className="spin" /> : c.status === 'live' ? 'Pause' : 'Set live'}
-              </button>
+              {c.status === 'live' && (
+                <ActionButton
+                  className="btn sm primary"
+                  onClick={() => run(c)}
+                  disabled={busy === c.id}
+                  title="Advance every prospect in this campaign that has something to do"
+                >
+                  <Icons.play size={12} /> Run
+                </ActionButton>
+              )}
+              <button className="btn sm" onClick={() => setEditing({ campaign: c, tab: 'targeting' })}>Edit</button>
+              <ActionButton className="btn sm" onClick={() => duplicate(c)} title="Clone this campaign's targeting, policy and prompts into a new draft">
+                Duplicate
+              </ActionButton>
+              {c.status !== 'archived' && (
+                <button
+                  className={`btn sm ${c.status === 'live' ? '' : 'primary'}`}
+                  disabled={busy === c.id}
+                  onClick={() => setStatus(c, c.status === 'live' ? 'paused' : 'live')}
+                >
+                  {busy === c.id ? <span className="spin" /> : c.status === 'live' ? 'Pause' : c.status === 'draft' ? 'Set live' : 'Resume'}
+                </button>
+              )}
+              {c.status !== 'archived' && c.status !== 'draft' && (
+                <button className="btn sm" disabled={busy === c.id} onClick={() => setStatus(c, 'archived')}>
+                  Complete / Archive
+                </button>
+              )}
+              {c.status === 'archived' && (
+                <button className="btn sm" disabled={busy === c.id} onClick={() => setStatus(c, 'draft')}>
+                  Reopen as draft
+                </button>
+              )}
             </div>
 
             <div className="panel-body stack-sm">
@@ -327,6 +556,10 @@ export default function Campaigns() {
                 <span>{c.require_approval !== false ? 'Approval required before sending' : 'Sends without approval'}</span>
                 <span>Updated {when(c.updated_at)}</span>
               </div>
+
+              {runNotice?.id === c.id && (
+                <Banner tone="info">{runNotice.text}</Banner>
+              )}
             </div>
           </div>
         ))}
@@ -334,9 +567,18 @@ export default function Campaigns() {
 
       {editing && (
         <Editor
-          campaign={editing}
+          campaign={editing.campaign}
+          initialTab={editing.tab}
           onClose={() => setEditing(null)}
           onSaved={refresh}
+        />
+      )}
+
+      {creating && (
+        <NewCampaign
+          onClose={() => setCreating(false)}
+          onCreated={async () => { await refresh(); setCreating(false); }}
+          actor={actor}
         />
       )}
     </>

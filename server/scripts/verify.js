@@ -11,10 +11,9 @@ import {
   AGENT_SCHEMAS, isEmptyOutput, coerceIcp, coerceResearch, coerceStrategy,
   coercePersonalisation, coerceConversation, toArray, toNumberOrNull, toObject, INTENTS,
 } from '../src/agents/schemas.js';
-import { unwrapEnvelope, isAsyncAcknowledgement, parseLooseJson } from '../src/agents/dronahq.js';
+import { parseLooseJson } from '../src/lib/json.js';
 import { runLocalEngine } from '../src/agents/localEngine.js';
 import { AGENT_REGISTRY, getAgent, PIPELINE } from '../src/agents/registry.js';
-import { envNamesFor, DRONAHQ_AGENTS } from '../src/config.js';
 
 let pass = 0;
 let fail = 0;
@@ -39,42 +38,20 @@ ok('every agent has an id, a name and an engine',
 ok('ids are unique',
   new Set(AGENT_REGISTRY.map((a) => a.id)).size === AGENT_REGISTRY.length);
 ok('every pipeline step is a real agent', PIPELINE.every((id) => getAgent(id)));
-ok('every callable dronahq agent has env names',
-  AGENT_REGISTRY.filter((a) => a.callable && a.engine === 'dronahq').every((a) => envNamesFor(a.id)));
-ok('env names match the config keys',
-  Object.keys(DRONAHQ_AGENTS).every((id) => envNamesFor(id) !== null));
-ok('icp_fitment reads DRONAHQ_ICP_URL, not DRONAHQ_ICP_FITMENT_URL',
-  envNamesFor('icp_fitment').url === 'DRONAHQ_ICP_URL');
-ok('outreach_strategy reads DRONAHQ_STRATEGY_URL',
-  envNamesFor('outreach_strategy').url === 'DRONAHQ_STRATEGY_URL');
+ok('every callable agent meant to reason runs on the llm engine',
+  AGENT_REGISTRY.filter((a) => a.callable && a.id !== 'followup_timing').every((a) => a.engine === 'llm'));
+ok('follow-up timing is deliberately deterministic', getAgent('followup_timing').engine === 'our_engine');
 ok('voice is registered but not callable', getAgent('voice_sdr').callable === false);
 
-/* ── envelopes ────────────────────────────────────────────────────────── */
-group('DronaHQ envelopes');
+/* ── loose JSON parsing ──────────────────────────────────────────────── */
+group('Loose JSON parsing');
 
-const CORE = { verdict: 'qualify', fit_score: 80 };
-
-ok('bare object', unwrapEnvelope(CORE).verdict === 'qualify');
-ok('response wrapper', unwrapEnvelope({ response: CORE }).verdict === 'qualify');
-ok('data wrapper', unwrapEnvelope({ data: CORE }).verdict === 'qualify');
-ok('output wrapper', unwrapEnvelope({ output: CORE }).verdict === 'qualify');
-ok('result wrapper', unwrapEnvelope({ result: CORE }).verdict === 'qualify');
-ok('nested wrappers', unwrapEnvelope({ data: { output: CORE } }).verdict === 'qualify');
-ok('stringified json', unwrapEnvelope({ response: JSON.stringify(CORE) }).verdict === 'qualify');
-ok('markdown fenced json',
-  unwrapEnvelope({ output: '```json\n' + JSON.stringify(CORE) + '\n```' }).verdict === 'qualify');
-ok('single-element array', unwrapEnvelope([CORE]).verdict === 'qualify');
-ok('prose around json',
-  unwrapEnvelope({ message: `Here you go: ${JSON.stringify(CORE)} hope that helps` })?.verdict === 'qualify');
+ok('bare object passes through', parseLooseJson({ a: 1 })?.a === 1);
+ok('plain json string parses', parseLooseJson('{"a":1}')?.a === 1);
 ok('loose json parses a fenced body', parseLooseJson('```\n{"a":1}\n```')?.a === 1);
-
-ok('background acknowledgement is detected',
-  isAsyncAcknowledgement({ run_id: 'r1', thread_id: 't1' }));
-ok('camelCase acknowledgement is detected',
-  isAsyncAcknowledgement({ runId: 'r1', threadId: 't1' }));
-ok('a run id alongside real output is not an acknowledgement',
-  !isAsyncAcknowledgement({ run_id: 'r1', response: CORE }));
-ok('real output is not an acknowledgement', !isAsyncAcknowledgement(CORE));
+ok('loose json parses prose around a json object',
+  parseLooseJson('Sure, here you go: {"a":1} hope that helps')?.a === 1);
+ok('unparseable text returns null', parseLooseJson('not json at all') === null);
 
 /* ── coercion ─────────────────────────────────────────────────────────── */
 group('Coercion');

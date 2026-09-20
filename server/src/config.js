@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CALLABLE_AGENTS, getAgentEngine } from './agents/registry.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -68,68 +69,32 @@ export const env = {
   MAX_AGENT_CALLS_PER_DAY: int('MAX_AGENT_CALLS_PER_DAY', 250),
   AGENT_TIMEOUT_MS: int('AGENT_TIMEOUT_MS', 45000),
 
-  // When a DronaHQ call fails or returns nothing usable, answer from the
+  // When the LLM engine fails or is not configured, answer from the
   // deterministic local engine instead of stalling. Every run records which
   // engine produced it either way.
   LOCAL_ENGINE_ENABLED: bool('LOCAL_ENGINE_ENABLED', true),
 
   // Used to attribute cost to a run when the provider reports none.
   COST_PER_1K_TOKENS_USD: parseFloat(str('COST_PER_1K_TOKENS_USD', '0.015')) || 0.015,
+
+  // The intelligence layer: Groq, then Gemini, in the order named here. Each
+  // name needs its own key below to count as configured. GROQ_API_KEY may
+  // hold more than one key, comma separated — the second is tried if the
+  // first is rate-limited or rejected, before moving on to Gemini.
+  LLM_PROVIDER_ORDER: list('LLM_PROVIDER_ORDER', ['groq', 'gemini']),
+  LLM_TIMEOUT_MS: int('LLM_TIMEOUT_MS', 30000),
+
+  GROQ_API_KEYS: list('GROQ_API_KEY'),
+  GROQ_MODEL: str('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+
+  GEMINI_API_KEY: str('GEMINI_API_KEY'),
+  GEMINI_MODEL: str('GEMINI_MODEL', 'gemini-3.6-flash'),
 };
 
-/**
- * One webhook URL and key per agent, so an agent can be rolled out or rolled
- * back on its own. A shared DRONAHQ_API_KEY covers all five unless an agent
- * overrides it.
- */
-export const DRONAHQ_AGENTS = {
-  research: {
-    url: str('DRONAHQ_RESEARCH_URL'),
-    key: str('DRONAHQ_RESEARCH_KEY') || str('DRONAHQ_API_KEY'),
-  },
-  icp_fitment: {
-    url: str('DRONAHQ_ICP_URL'),
-    key: str('DRONAHQ_ICP_KEY') || str('DRONAHQ_API_KEY'),
-  },
-  outreach_strategy: {
-    url: str('DRONAHQ_STRATEGY_URL'),
-    key: str('DRONAHQ_STRATEGY_KEY') || str('DRONAHQ_API_KEY'),
-  },
-  personalisation: {
-    url: str('DRONAHQ_PERSONALISATION_URL'),
-    key: str('DRONAHQ_PERSONALISATION_KEY') || str('DRONAHQ_API_KEY'),
-  },
-  conversation: {
-    url: str('DRONAHQ_CONVERSATION_URL'),
-    key: str('DRONAHQ_CONVERSATION_KEY') || str('DRONAHQ_API_KEY'),
-  },
-};
-
-/**
- * The environment variable names for one agent.
- *
- * Exported rather than derived from the agent id, because two of them do not
- * match: `icp_fitment` reads DRONAHQ_ICP_URL and `outreach_strategy` reads
- * DRONAHQ_STRATEGY_URL. A screen that built the name by upper-casing the id
- * told people to set DRONAHQ_ICP_FITMENT_URL, which does nothing.
- */
-const ENV_STEM = {
-  research: 'RESEARCH',
-  icp_fitment: 'ICP',
-  outreach_strategy: 'STRATEGY',
-  personalisation: 'PERSONALISATION',
-  conversation: 'CONVERSATION',
-};
-
-export function envNamesFor(agentName) {
-  const stem = ENV_STEM[agentName];
-  if (!stem) return null;
-  return { url: `DRONAHQ_${stem}_URL`, key: `DRONAHQ_${stem}_KEY`, sharedKey: 'DRONAHQ_API_KEY' };
-}
-
-export function isDronaHqConfigured(agentName) {
-  const cfg = DRONAHQ_AGENTS[agentName];
-  return Boolean(cfg && cfg.url && cfg.key);
+// Not imported from llmEngine.js to avoid a circular import (llmEngine.js
+// reads `env` from here); the check is small enough to keep in sync by hand.
+export function isLlmEngineConfigured() {
+  return env.GROQ_API_KEYS.length > 0 || Boolean(env.GEMINI_API_KEY);
 }
 
 /**
@@ -141,9 +106,11 @@ export function configReport() {
   if (!env.SUPABASE_URL) missing.push('SUPABASE_URL');
   if (!env.SUPABASE_SERVICE_ROLE_KEY) missing.push('SUPABASE_SERVICE_ROLE_KEY');
 
+  const llmConfigured = isLlmEngineConfigured();
   const agent_routing = {};
-  for (const name of Object.keys(DRONAHQ_AGENTS)) {
-    agent_routing[name] = isDronaHqConfigured(name) ? 'dronahq' : 'local_engine';
+  for (const name of CALLABLE_AGENTS) {
+    const engine = getAgentEngine(name);
+    agent_routing[name] = engine === 'our_engine' ? 'our_engine' : llmConfigured ? 'llm_engine' : 'local_engine';
   }
 
   return {
@@ -154,6 +121,9 @@ export function configReport() {
     cors_origins: env.CORS_ORIGINS,
     worker_enabled: env.WORKER_ENABLED,
     local_engine_enabled: env.LOCAL_ENGINE_ENABLED,
+    llm_providers: env.LLM_PROVIDER_ORDER.filter(
+      (p) => (p === 'groq' && env.GROQ_API_KEYS.length > 0) || (p === 'gemini' && env.GEMINI_API_KEY)
+    ),
     agent_routing,
   };
 }

@@ -21,8 +21,14 @@ export const getCampaign = (id) => get(`/campaigns/${id}`);
 export const createCampaign = (body) => post('/campaigns', body);
 export const updateCampaign = (id, body) => patch(`/campaigns/${id}`, body);
 export const runCampaign = (id, body) => post(`/campaigns/${id}/run`, body ?? { limit: 5 });
+export const duplicateCampaign = (id, body) => post(`/campaigns/${id}/duplicate`, body ?? {});
 export const getPrompts = (id) => get(`/campaigns/${id}/prompts`);
 export const savePrompt = (id, agent, body) => put(`/campaigns/${id}/prompts/${agent}`, body);
+
+/* reps */
+export const listReps = () => get('/reps');
+export const createRep = (body) => post('/reps', body);
+export const deleteRep = (id) => del(`/reps/${id}`);
 
 /* prospects */
 export const listProspects = (params) => get(`/prospects${qs(params)}`);

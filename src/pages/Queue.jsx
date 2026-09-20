@@ -281,7 +281,7 @@ export default function Queue() {
                 {queue.stats.fallback_runs_today > 0 && (
                   <Note>
                     {queue.stats.fallback_runs_today} of today&apos;s {queue.stats.agent_runs_today} runs
-                    were answered by the built-in engine rather than a DronaHQ agent. Every one is
+                    were answered by the built-in engine rather than a real model call. Every one is
                     labelled as such on the prospect it belongs to.
                   </Note>
                 )}

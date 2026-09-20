@@ -3,6 +3,7 @@ import { useApp } from './context/AppContext.jsx';
 import { Icons, Banner, Loading } from './components/ui.jsx';
 
 import Login from './pages/Login.jsx';
+import Dashboard from './pages/Dashboard.jsx';
 import Queue from './pages/Queue.jsx';
 import Prospects from './pages/Prospects.jsx';
 import ProspectDetail from './pages/ProspectDetail.jsx';
@@ -12,9 +13,10 @@ import Knowledge from './pages/Knowledge.jsx';
 import Controls from './pages/Controls.jsx';
 
 const NAV = [
-  { to: '/queue', label: 'Queue', icon: Icons.queue, badge: 'approvals' },
-  { to: '/prospects', label: 'Prospects', icon: Icons.people },
+  { to: '/dashboard', label: 'Dashboard', icon: Icons.activity },
   { to: '/campaigns', label: 'Campaigns', icon: Icons.target },
+  { to: '/prospects', label: 'Prospects', icon: Icons.people },
+  { to: '/queue', label: 'Approvals', icon: Icons.queue, badge: 'approvals' },
   { to: '/agents', label: 'Agents', icon: Icons.bot },
   { to: '/knowledge', label: 'Knowledge', icon: Icons.book },
   { to: '/controls', label: 'Controls', icon: Icons.shield },
@@ -33,8 +35,8 @@ function Sidebar() {
     connection === 'not_configured' ? 'API address not set' : 'API unreachable';
 
   const routing = health?.config?.agent_routing ?? {};
-  const live = Object.values(routing).filter((e) => e === 'dronahq').length;
-  const total = Object.keys(routing).length;
+  const live = Object.values(routing).filter((e) => e === 'llm_engine').length;
+  const total = Object.values(routing).filter((e) => e !== 'our_engine').length;
 
   return (
     <aside className="sidebar">
@@ -65,7 +67,7 @@ function Sidebar() {
         </div>
         {total > 0 && (
           <div style={{ marginTop: 4 }}>
-            {live} of {total} agents on DronaHQ
+            {live} of {total} agents live on Groq/Gemini
           </div>
         )}
         <div className="row" style={{ marginTop: 8, gap: 6 }}>
@@ -133,7 +135,8 @@ export default function App() {
       <Sidebar />
       <div className="main">
         <Routes>
-          <Route path="/" element={<Navigate to="/queue" replace state={{ from: location }} />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace state={{ from: location }} />} />
+          <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/queue" element={<Queue />} />
           <Route path="/prospects" element={<Prospects />} />
           <Route path="/prospects/:id" element={<ProspectDetail />} />
@@ -141,7 +144,7 @@ export default function App() {
           <Route path="/agents" element={<Agents />} />
           <Route path="/knowledge" element={<Knowledge />} />
           <Route path="/controls" element={<Controls />} />
-          <Route path="*" element={<Navigate to="/queue" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </div>
     </div>
