@@ -60,6 +60,8 @@ export const getScenarios = (id) => get(`/agents/${id}/scenarios`);
 export const pauseAgent = (id, body) => post(`/agents/${id}/pause`, body);
 export const testAgent = (id, body) => post(`/agents/${id}/test`, body ?? {});
 export const getKeys = () => get('/agents/keys');
+export const getModels = () => get('/agents/models');
+export const refreshModels = () => post('/agents/models/refresh', {});
 export const reviveKeys = (body) => post('/agents/keys/revive', body ?? {});
 
 /* knowledge */

@@ -4,11 +4,13 @@
   "description": "Pigeon SDR API: orchestrator, agent layer and control plane.",
   "main": "src/index.js",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "check": "node scripts/verify.js && node scripts/verify-failover.js"
+    "check": "node scripts/verify.js && node scripts/verify-failover.js && node scripts/verify-models.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.116.0",

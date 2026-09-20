@@ -105,6 +105,13 @@ export const env = {
   MAX_AGENT_CALLS_PER_DAY: int('MAX_AGENT_CALLS_PER_DAY', 250),
   AGENT_TIMEOUT_MS: int('AGENT_TIMEOUT_MS', 45000),
 
+  // Shutting down. The grace window lets a request already in progress
+  // answer; after it, every remaining socket is ended so the port is actually
+  // released. Without that, a keep-alive connection from the app's polling
+  // holds the port open and the next `node --watch` restart hits EADDRINUSE.
+  SHUTDOWN_GRACE_MS: int('SHUTDOWN_GRACE_MS', 1500),
+  SHUTDOWN_TIMEOUT_MS: int('SHUTDOWN_TIMEOUT_MS', 8000),
+
   // How many prospects a single run works on at the same time. Two is a
   // deliberate default: it halves wall-clock time against one, and going
   // higher mostly buys rate limits rather than speed.
@@ -126,20 +133,34 @@ export const env = {
   LLM_PROVIDER_ORDER: list('LLM_PROVIDER_ORDER', ['groq', 'gemini']),
   LLM_TIMEOUT_MS: int('LLM_TIMEOUT_MS', 30000),
 
+  // ── models ────────────────────────────────────────────────────────────
+  // These are a preference, not a hard-coded ladder. The engine asks each
+  // provider what it actually has (see agents/modelCatalog.js) and puts the
+  // model named here first when it genuinely exists. When it does not, the
+  // best model the account can reach is used and the log says so.
+  //
+  // This replaced a static list. Providers retire models constantly, and a
+  // stale string here used to fail the whole pipeline with "every provider
+  // failed", which reads like a key problem and sends you to the wrong place.
+  MODEL_AUTO_DISCOVER: bool('MODEL_AUTO_DISCOVER', true),
+  MODEL_CATALOG_TTL_MS: int('MODEL_CATALOG_TTL_MS', 1800000),
+  MODEL_CATALOG_TIMEOUT_MS: int('MODEL_CATALOG_TIMEOUT_MS', 10000),
+  // How far down the discovered list one call is willing to walk. Beyond a
+  // handful, a model that keeps being rejected is a prompt problem rather
+  // than a model problem, and trying twenty of them just costs time.
+  MODEL_LADDER_MAX: int('MODEL_LADDER_MAX', 5),
+
   GROQ_KEY_COUNT: groqConfigured,
-  GROQ_MODEL: str('GROQ_MODEL', 'openai/gpt-oss-120b'),
-  // Tried in order when the named model is rejected as unknown. A retired
-  // model name is one of the most common ways this layer breaks, and it
-  // presents as "every provider failed", which sends you looking at keys.
+  GROQ_MODEL: str('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+  // Only used when discovery is off, or when the provider will not answer.
   GROQ_MODEL_FALLBACKS: list('GROQ_MODEL_FALLBACKS', [
-    'openai/gpt-oss-20b',
     'openai/gpt-oss-120b',
+    'llama-3.1-8b-instant',
   ]),
 
   GEMINI_KEY_COUNT: geminiConfigured,
-  GEMINI_MODEL: str('GEMINI_MODEL', 'gemini-3.6-flash'),
+  GEMINI_MODEL: str('GEMINI_MODEL', 'gemini-2.5-flash'),
   GEMINI_MODEL_FALLBACKS: list('GEMINI_MODEL_FALLBACKS', [
-    'gemini-2.5-flash',
     'gemini-2.0-flash',
     'gemini-1.5-flash',
   ]),
@@ -228,6 +249,7 @@ export function configReport() {
       groq: { configured: keyCount('groq'), max: MAX_KEYS_PER_PROVIDER, model: env.GROQ_MODEL },
       gemini: { configured: keyCount('gemini'), max: MAX_KEYS_PER_PROVIDER, model: env.GEMINI_MODEL },
     },
+    model_auto_discover: env.MODEL_AUTO_DISCOVER,
     discovery: discoveryRouting(),
     agent_routing,
   };

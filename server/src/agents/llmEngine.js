@@ -28,6 +28,7 @@
 import { parseLooseJson } from '../lib/json.js';
 import { env } from '../config.js';
 import { leaseKey, poolStatus, reportSuccess, reportFailure, keyCount } from './keyPool.js';
+import { resolveLadder, staticLadder } from './modelCatalog.js';
 
 export class LlmError extends Error {
   constructor(message, { code = 'llm_error', kind = null, raw = null, status = null } = {}) {
@@ -60,28 +61,74 @@ export function isLlmEngineConfigured() {
 /* ── model selection ─────────────────────────────────────────────────── */
 
 /**
- * The model each provider is currently using. Starts at the configured one
- * and only moves when a provider tells us that model does not exist, so the
- * configured value is always respected while it works.
+ * The model each provider is currently using, and the ladder behind it.
+ *
+ * The ladder is discovered from the provider rather than written down here.
+ * A hand-maintained list of model names was the single most common way this
+ * layer broke: providers retire models on their own schedule, and a stale
+ * string failed the whole pipeline with "every provider failed", which reads
+ * like a key problem. See agents/modelCatalog.js.
  */
-const activeModel = {
-  groq: env.GROQ_MODEL,
-  gemini: env.GEMINI_MODEL,
-};
+const activeModel = { groq: env.GROQ_MODEL, gemini: env.GEMINI_MODEL };
+const ladders = new Map();
+const ladderMeta = new Map();
 
-const modelLadder = {
-  groq: [env.GROQ_MODEL, ...env.GROQ_MODEL_FALLBACKS],
-  gemini: [env.GEMINI_MODEL, ...env.GEMINI_MODEL_FALLBACKS],
-};
+/**
+ * The ladder for a provider, resolved once and reused. The first call pays
+ * for one /models request; every call after it is free.
+ */
+async function ladderFor(provider) {
+  if (ladders.has(provider)) return ladders.get(provider);
+
+  let resolved;
+  try {
+    resolved = await resolveLadder(provider);
+  } catch (err) {
+    // Discovery is an optimisation. If it throws for a reason the catalogue
+    // did not anticipate, the configured model is still a perfectly good
+    // thing to try, and failing the call here would be worse than the bug
+    // this whole module was written to fix.
+    resolved = { ladder: staticLadder(provider), source: 'env', error: err.message };
+  }
+
+  const ladder = resolved.ladder.length ? resolved.ladder : staticLadder(provider);
+
+  ladders.set(provider, ladder);
+  ladderMeta.set(provider, resolved);
+  activeModel[provider] = ladder[0];
+
+  return ladder;
+}
 
 /** The next model to try after `current`, or null when the ladder runs out. */
 function nextModel(provider, current) {
-  const ladder = [...new Set(modelLadder[provider] ?? [])];
+  const ladder = ladders.get(provider) ?? staticLadder(provider);
   const at = ladder.indexOf(current);
   return ladder[at + 1] ?? null;
 }
 
 export const activeModels = () => ({ ...activeModel });
+
+/** What each provider's ladder is, and where it came from. For the UI. */
+export function modelLadders() {
+  const out = {};
+  for (const provider of Object.keys(activeModel)) {
+    out[provider] = {
+      active: activeModel[provider],
+      ladder: ladders.get(provider) ?? staticLadder(provider),
+      ...(ladderMeta.get(provider) ?? { source: 'env (not yet resolved)' }),
+    };
+  }
+  return out;
+}
+
+/** Forget the resolved ladders so the next call rediscovers them. */
+export function resetLadders() {
+  ladders.clear();
+  ladderMeta.clear();
+  activeModel.groq = env.GROQ_MODEL;
+  activeModel.gemini = env.GEMINI_MODEL;
+}
 
 /* ── prompts ────────────────────────────────────────────────────────── */
 
@@ -409,9 +456,11 @@ async function callProvider(provider, system, user, { signal, attempts }) {
   const status = poolStatus(provider);
   if (status.total === 0) return null;
 
-  let model = activeModel[provider];
+  const ladder = await ladderFor(provider);
+  let model = activeModel[provider] ?? ladder[0];
+
   // At most one attempt per key, plus room to climb the model ladder.
-  const budget = status.total + (modelLadder[provider]?.length ?? 1);
+  const budget = status.total + ladder.length;
 
   for (let i = 0; i < budget; i += 1) {
     if (signal?.aborted) throw new CancelledError();

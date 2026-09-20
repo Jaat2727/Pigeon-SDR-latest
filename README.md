@@ -28,7 +28,8 @@ underneath, Groq and Gemini for the reasoning, Apollo for finding real people.
 12. [How the numbers are counted](#12-how-the-numbers-are-counted)
 13. [Folder structure](#13-folder-structure)
 14. [What is not built, and why](#14-what-is-not-built-and-why)
-15. [About DronaHQ](#15-about-dronahq)
+15. [When something goes wrong](#15-when-something-goes-wrong)
+16. [About DronaHQ](#16-about-dronahq)
 
 ---
 
@@ -232,12 +233,54 @@ benching a rate-limited one wastes every call after it.
 5. the local rule engine             every provider is out
 ```
 
-Step 3 is worth knowing about. `GROQ_MODEL_FALLBACKS` and
-`GEMINI_MODEL_FALLBACKS` hold a ladder of model names. A retired model name is
-one of the most common ways this layer breaks, and without a ladder it presents
-as "every provider failed", which sends you looking at your keys for a problem
-that was one wrong string. When a fallback works, it is remembered, so the next
-hundred calls do not repeat the discovery.
+Step 3 is worth its own section.
+
+### Models are discovered, not declared
+
+This used to be a hand-written ladder of model names in `.env`. It broke
+twice. Providers retire models on their own schedule: `llama3-70b-8192`
+worked, then did not, then its replacement was renamed too. Every time, the
+whole pipeline failed with `Every provider failed`, which reads like a key
+problem and sends you to check your keys. It was one stale string.
+
+So on first use the engine asks each provider `GET /models` with a real key,
+and builds the ladder from the answer:
+
+1. the model you set in `GROQ_MODEL` / `GEMINI_MODEL`, **if it genuinely
+   exists on your account**
+2. any `*_MODEL_FALLBACKS` you named that also exist
+3. everything else the account can reach, best first
+
+Ranking drops models that answer a chat call but cannot do this job: safety
+classifiers, speech, embeddings, image models. A safety classifier returns a
+verdict rather than the JSON an agent asked for, so falling back to one would
+fail on every call and look like the model was broken.
+
+Three rules keep it honest:
+
+- **Your choice wins.** A configured model that exists is always tried first.
+  Discovery only supplies what comes after it.
+- **Failure is visible.** If the catalogue cannot be read, the static list from
+  `.env` is used and both the log and `/health` say so.
+- **Nothing is fatal.** A provider that will not answer `/models` still gets
+  tried with your configured model.
+
+When your configured model is missing, the log names the replacement and tells
+you what to set:
+
+```
+[models] GROQ_MODEL is set to "llama3-70b-8192", which this account cannot
+reach. Using "llama-3.3-70b-versatile" instead. Set GROQ_MODEL to one of:
+llama-3.3-70b-versatile, openai/gpt-oss-120b, llama-3.1-8b-instant
+```
+
+To see what your keys can reach right now, open `GET /agents/models`, or press
+**Recheck models** on the Agents screen. The list is cached for thirty
+minutes; that button forces a fresh read without a redeploy.
+
+Set `MODEL_AUTO_DISCOVER=false` to pin the models exactly and never ask. Only
+worth it if you need reproducibility more than you need the app to survive a
+model being retired.
 
 ### Seeing it
 
@@ -525,11 +568,14 @@ compiled into the JavaScript the browser downloads.
 | Variable | Default | What it is |
 |---|---|---|
 | `GROQ_API_KEY` | | Up to six keys, comma separated. Or `GROQ_API_KEY_1` … `_6`. |
-| `GROQ_MODEL` | `llama3-70b-8192` | |
-| `GROQ_MODEL_FALLBACKS` | `llama-3.1-8b-instant,…` | Tried if the model above is rejected as unknown |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | A preference. Used if your account has it, otherwise the best available one is. |
+| `GROQ_MODEL_FALLBACKS` | `openai/gpt-oss-120b,…` | Only used when discovery is off or the provider will not answer |
 | `GEMINI_API_KEY` | | Up to six keys, same rules |
-| `GEMINI_MODEL` | `gemini-1.5-flash` | |
-| `GEMINI_MODEL_FALLBACKS` | `gemini-2.5-flash,…` | |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Same: a preference, not a requirement |
+| `GEMINI_MODEL_FALLBACKS` | `gemini-2.0-flash,…` | |
+| `MODEL_AUTO_DISCOVER` | `true` | Ask each provider what it has. False pins the models above exactly. |
+| `MODEL_CATALOG_TTL_MS` | `1800000` | How long a model list is trusted |
+| `MODEL_LADDER_MAX` | `5` | How far down the list one call will walk |
 | `LLM_PROVIDER_ORDER` | `groq,gemini` | |
 | `LLM_TIMEOUT_MS` | `30000` | |
 | `LOCAL_ENGINE_ENABLED` | `true` | Set false to make a failed model call stop the step instead of falling back |
@@ -554,6 +600,8 @@ compiled into the JavaScript the browser downloads.
 | `WORKER_POLL_MS` | `30000` | |
 | `WORKER_BATCH_SIZE` | `5` | |
 | `PORT` | `3001` | Do not set this on Railway |
+| `SHUTDOWN_GRACE_MS` | `1500` | How long an in-flight request gets before its socket is ended |
+| `SHUTDOWN_TIMEOUT_MS` | `8000` | Hard stop, so a wedged process cannot hold the port |
 | `COST_PER_1K_TOKENS_USD` | `0.015` | Used when the provider reports no usage |
 
 ---
@@ -566,7 +614,7 @@ compiled into the JavaScript the browser downloads.
 npm --prefix server run check
 ```
 
-Two files, 158 checks, no network and no database. Every assertion is about
+Three files, 190 checks, no network and no database. Every assertion is about
 logic that has broken at least once.
 
 `scripts/verify.js` (139 checks) covers the agent registry, loose JSON parsing,
@@ -591,6 +639,20 @@ service, the retry on the fallback model then found an empty pool, and the call
 failed with "every key is cooling down", which sends you looking at your keys
 for a problem that was one wrong model string.
 
+No model name appears in an assertion in that file. They are declared once at
+the top and every check reads them back out of `process.env`, because an
+earlier version pasted the literal strings into the assertions and changing a
+default in `.env` broke the suite for a reason unrelated to what it was
+testing.
+
+`scripts/verify-models.js` (29 checks) covers discovery itself: ranking that
+excludes safety, speech and embedding models; a configured model that exists
+being tried first; a configured model that has been retired not breaking the
+call; named fallbacks honoured only when real; a provider that will not answer
+falling back to the environment with the reason recorded; a rejected key
+reported as a key problem rather than a model problem; Gemini's differently
+shaped response; and the cache not re-fetching on every call.
+
 ### Live checks
 
 | Endpoint | What it tells you |
@@ -599,6 +661,8 @@ for a problem that was one wrong model string.
 | `GET /health/schema` | Which tables exist. Names `job_runs` specifically if `04-runtime.sql` has not been run. |
 | `GET /health/providers` | Key states plus a one-record Apollo search that spends no credits |
 | `GET /agents/keys` | The key panel's data: every key, redacted, with its state and history |
+| `GET /agents/models` | Every model your keys can actually reach, ranked. Where to look when a model name is rejected. |
+| `POST /agents/models/refresh` | Ask the providers again now, without waiting for the cache or redeploying |
 | `GET /agents/routing` | Which engine each agent would use on its next call, and which discovery source is active |
 
 And from the app itself: the Agents screen playground fires one real call and
@@ -707,7 +771,79 @@ otherwise.
 
 ---
 
-## 15. About DronaHQ
+## 15. When something goes wrong
+
+Three failures that cost real time, what caused them, and what now happens
+instead.
+
+### `EADDRINUSE: address already in use 0.0.0.0:3001`
+
+**What you saw.** Edit a file, `node --watch` restarts, the new server crashes
+on the port. Worse, the old process kept running, so the app carried on
+working while serving the environment variables you had just changed.
+
+**The cause.** `server.close()` stops accepting new connections but waits for
+open ones to end by themselves. The app polls a running job every 1.5 seconds
+over a keep-alive connection, which never ends. So `close()` never completed,
+the old process never exited, and it held the port.
+
+**What happens now.** The server tracks every open socket and ends them itself
+during shutdown, so the port is genuinely released. `SIGINT`, `SIGTERM`,
+`SIGUSR2` and `SIGBREAK` are all handled, in-flight jobs are cancelled first,
+and a crash releases the port too. Measured: 111ms to exit with a keep-alive
+socket held open, and the next instance binds on its first try.
+
+If it still happens, the port is held by something that is not this server,
+and the error message now tells you how to find it:
+
+```
+netstat -ano | findstr :3001
+taskkill /PID <the number in the last column> /F
+```
+
+Or run this one elsewhere: `PORT=3002 npm run dev`
+
+### `The model X has been decommissioned`
+
+**What you saw.** Everything worked, then one morning every agent call failed
+with `Every provider failed`. Checking keys found nothing wrong, because
+nothing was wrong with the keys.
+
+**The cause.** A hand-written ladder of model names in `.env` and `config.js`.
+The provider retired the model; the config did not know.
+
+**What happens now.** The ladder is asked for, not written down. See
+[section 4](#models-are-discovered-not-declared). Your configured model is
+still tried first when it exists; when it does not, the best available one is
+used and the log names it. To see the current list: `GET /agents/models`, or
+**Recheck models** on the Agents screen.
+
+### A test failing because a model name changed
+
+**What you saw.** `FAIL it goes straight to the working model`, right after
+editing `.env`.
+
+**The cause.** `verify-failover.js` had model names pasted into its
+assertions, so the tests were checking the contents of a config file rather
+than the behaviour of the engine.
+
+**What happens now.** The models are declared once at the top of that file and
+every assertion reads them back from `process.env`. Change the names and the
+tests still pass, because what they are testing did not change.
+
+### Anything else
+
+Every request carries an `x-request-id`, echoed in the response header and
+printed in the API log with the status and duration. Copy it out of the
+browser network tab and grep the Railway log for it.
+
+Then, in order: `/health` for configuration, `/health/schema` for the
+database, `/health/providers` for keys and models, and the Agents screen
+playground for the full trace of any failing agent call.
+
+---
+
+## 16. About DronaHQ
 
 The brief wanted DronaHQ as the agent engine. It was fully wired: all five
 agents, correct webhook payloads, correct auth headers. Every single one

@@ -10,6 +10,7 @@ import { supabase, dbReady } from '../db/client.js';
 import { asyncHandler } from '../lib/http.js';
 import { configReport } from '../config.js';
 import { keyHealth } from '../agents/keyPool.js';
+import { catalogStatus } from '../agents/modelCatalog.js';
 import { pingApollo, isApolloConfigured } from '../services/discovery/apollo.js';
 
 const router = express.Router();
@@ -54,6 +55,7 @@ router.get('/', asyncHandler(async (req, res) => {
     db_latency_ms: Date.now() - started,
     uptime_s: Math.round(process.uptime()),
     keys: keyHealth(),
+    models: catalogStatus(),
     config,
   });
 }));
@@ -73,6 +75,7 @@ router.get('/providers', asyncHandler(async (req, res) => {
 
   res.json({
     llm: keyHealth(),
+    models: catalogStatus(),
     apollo,
     discovery: configReport().discovery,
   });

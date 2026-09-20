@@ -138,6 +138,22 @@ export function leaseKey(provider) {
 }
 
 /**
+ * A usable key, without taking it off the rota or counting a call against it.
+ *
+ * Reading a provider's model list is housekeeping, not work. Leasing for it
+ * would inflate the key's call count and shuffle the rotation, which would
+ * make the key panel on the Agents screen report activity that never
+ * happened.
+ */
+export function peekKey(provider) {
+  const pool = poolOf(provider);
+  if (pool.entries.length === 0) return null;
+
+  thaw(pool);
+  return pool.entries.find((e) => e.state === 'healthy') ?? null;
+}
+
+/**
  * Every key this provider has, in order, with whichever ones are currently
  * unusable and when they come back. Used by `callLlm` to decide whether to
  * keep trying this provider or move on to the next one.

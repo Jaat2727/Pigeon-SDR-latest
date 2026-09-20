@@ -14,7 +14,8 @@ import { VISIBLE_AGENTS, getAgent } from '../agents/registry.js';
 import { getSystemControl, setSystemControl } from '../orchestrator/gate.js';
 import { computeAgentPerformance } from '../services/metrics.js';
 import { probeAgent } from '../agents/client.js';
-import { configuredLlmProviders, activeModels } from '../agents/llmEngine.js';
+import { configuredLlmProviders, activeModels, modelLadders, resetLadders } from '../agents/llmEngine.js';
+import { catalogStatus, getCatalog, clearCatalog } from '../agents/modelCatalog.js';
 import { keyHealth, reviveKey, reviveAll } from '../agents/keyPool.js';
 import { env, isLlmEngineConfigured, configReport, discoveryRouting } from '../config.js';
 import { logActivity } from '../services/activity.js';
@@ -324,12 +325,70 @@ router.get('/keys', asyncHandler(async (req, res) => {
     provider_order: env.LLM_PROVIDER_ORDER,
     configured_order: configuredLlmProviders(),
     models: activeModels(),
-    model_ladders: {
-      groq: [env.GROQ_MODEL, ...env.GROQ_MODEL_FALLBACKS],
-      gemini: [env.GEMINI_MODEL, ...env.GEMINI_MODEL_FALLBACKS],
-    },
+    // The ladder each provider is actually walking, and whether it came from
+    // the provider's own model list or from the environment. These used to be
+    // the same thing; now they can differ, and which one you are looking at
+    // is the first question when a call fails on a model name.
+    model_ladders: modelLadders(),
+    catalog: catalogStatus(),
+    auto_discover: env.MODEL_AUTO_DISCOVER,
     local_engine_enabled: env.LOCAL_ENGINE_ENABLED,
   });
+}));
+
+/**
+ * GET /agents/models — every model each provider will actually serve.
+ *
+ * Worth an endpoint of its own because the answer changes without anyone
+ * touching this codebase. When a call fails with "the model has been
+ * decommissioned", this is where you find out what to set instead, rather
+ * than searching the provider's changelog.
+ */
+router.get('/models', asyncHandler(async (req, res) => {
+  const providers = await Promise.all(
+    configuredLlmProviders().map(async (provider) => {
+      const catalog = await getCatalog(provider);
+      return {
+        provider,
+        configured: provider === 'groq' ? env.GROQ_MODEL : env.GEMINI_MODEL,
+        error: catalog.error,
+        available: catalog.ranked.map((m) => ({ id: m.id, context: m.context })),
+        also_present: catalog.models
+          .filter((m) => !catalog.ranked.some((r) => r.id === m.id))
+          .map((m) => m.id),
+      };
+    })
+  );
+
+  res.json({ auto_discover: env.MODEL_AUTO_DISCOVER, providers, ladders: modelLadders() });
+}));
+
+/**
+ * POST /agents/models/refresh — ask the providers again, now.
+ *
+ * The catalogue is cached for half an hour, which is right for a server that
+ * is running but wrong for the moment you have just been told a model is
+ * retired and want to see the replacement without waiting or redeploying.
+ */
+router.post('/models/refresh', asyncHandler(async (req, res) => {
+  clearCatalog();
+  resetLadders();
+
+  const providers = await Promise.all(
+    configuredLlmProviders().map(async (provider) => {
+      const catalog = await getCatalog(provider, { force: true });
+      return { provider, available: catalog.models.length, error: catalog.error, best: catalog.ranked[0]?.id ?? null };
+    })
+  );
+
+  await logActivity({
+    agentName: 'system',
+    action: 'Refreshed the model list',
+    detail: providers.map((p) => `${p.provider}: ${p.error ?? `${p.available} models, best is ${p.best}`}`).join('. '),
+    status: providers.some((p) => p.error) ? 'degraded' : 'success',
+  });
+
+  res.json({ refreshed: true, providers, ladders: modelLadders() });
 }));
 
 /** POST /agents/keys/revive — put cooled or rejected keys back on the rota. */

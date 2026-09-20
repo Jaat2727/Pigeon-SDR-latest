@@ -838,3 +838,10 @@ table.data tbody tr.clickable:hover { background: var(--surface-2); }
 .panel.alarmed { border-color: var(--stop); background: var(--stop-wash); }
 
 .kv.tight dt, .kv.tight dd { padding: 2px 0; }
+
+/* Which model a provider is on, under its key grid. */
+.model-line {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}

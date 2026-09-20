@@ -118,6 +118,59 @@ const KEY_EXPLAIN = {
   disabled: 'The provider rejected this key itself. It stays off until you fix it or revive it here.',
 };
 
+/**
+ * Which model this provider is on, and where that came from.
+ *
+ * This line exists because of a specific failure that kept recurring. A
+ * provider retires a model, every call starts failing with "every provider
+ * failed", and that reads like a key problem, so you go and check your keys.
+ * The engine now asks each provider what it actually has, and this says both
+ * what it picked and whether your configured choice was among them.
+ */
+function ModelLine({ provider, ladder, catalog }) {
+  if (!ladder) return null;
+
+  const discovered = ladder.source === 'discovered';
+  const missing = ladder.configured_available === false;
+
+  return (
+    <div className="model-line">
+      <div className="row wrap" style={{ gap: 6 }}>
+        <span className="tiny muted">on</span>
+        <Pill tone={missing ? 'warn' : 'line'}>{ladder.active}</Pill>
+        {discovered ? (
+          <span className="tiny muted">
+            picked from {catalog?.available_count ?? '?'} this account can reach
+          </span>
+        ) : (
+          <span className="tiny muted">from your environment, not checked against the provider</span>
+        )}
+      </div>
+
+      {missing && (
+        <div className="tiny" style={{ color: 'var(--warn)', marginTop: 4 }}>
+          {provider.toUpperCase()}_MODEL names a model this account cannot reach, so the best
+          available one is being used instead. Set it to{' '}
+          <code className="mono">{ladder.best_available}</code> to stop the warning.
+        </div>
+      )}
+
+      {ladder.error && (
+        <div className="tiny" style={{ color: 'var(--ink-3)', marginTop: 4 }}>
+          Could not read the model list ({ladder.error}), so the environment&apos;s list is being
+          used.
+        </div>
+      )}
+
+      {ladder.ladder?.length > 1 && (
+        <div className="tiny muted" style={{ marginTop: 4 }}>
+          If that one is rejected: {ladder.ladder.slice(1, 4).join(', then ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function KeyPanel({ keys, onReload, actor }) {
   if (!keys) return null;
 
@@ -129,6 +182,16 @@ function KeyPanel({ keys, onReload, actor }) {
       <div className="panel-head">
         <h2>Model keys</h2>
         <div className="spacer" />
+        <ActionButton
+          className="btn sm"
+          onClick={async () => {
+            await api.refreshModels();
+            await onReload();
+          }}
+          title="Ask each provider for its model list again, now"
+        >
+          <Icons.refresh size={12} /> Recheck models
+        </ActionButton>
         {unhealthy > 0 && (
           <ActionButton
             className="btn sm"
@@ -173,7 +236,6 @@ function KeyPanel({ keys, onReload, actor }) {
               {p.cooling > 0 && <Pill tone="warn">{p.cooling} cooling</Pill>}
               {p.disabled > 0 && <Pill tone="stop">{p.disabled} rejected</Pill>}
               <div className="spacer" />
-              <span className="tiny muted mono">{keys.models[p.provider]}</span>
             </div>
 
             {p.configured === 0 ? (
@@ -224,13 +286,11 @@ function KeyPanel({ keys, onReload, actor }) {
               </div>
             )}
 
-            {keys.model_ladders?.[p.provider]?.length > 1 && (
-              <div className="tiny muted" style={{ marginTop: 6 }}>
-                If {keys.model_ladders[p.provider][0]} is rejected as unknown, it falls back to{' '}
-                {keys.model_ladders[p.provider].slice(1).join(', then ')}, and remembers whichever
-                worked.
-              </div>
-            )}
+            <ModelLine
+              provider={p.provider}
+              ladder={keys.model_ladders?.[p.provider]}
+              catalog={(keys.catalog ?? []).find((c) => c.provider === p.provider)}
+            />
           </div>
         ))}
 
