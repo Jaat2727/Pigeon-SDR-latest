@@ -9,9 +9,10 @@ import { ConnectionBanner } from '../App.jsx';
 import * as api from '../api/index.js';
 import { friendlyError } from '../api/client.js';
 import {
-  ActionButton, Banner, Empty, EngineTag, Icons, Loading, Note, Pill,
+  ActionButton, Banner, Empty, Icons, Loading, Note, Pill,
   Pipeline, Score, StateTag, when,
 } from '../components/ui.jsx';
+import HistoryModal from '../components/HistoryModal.jsx';
 
 const TYPE_LABEL = {
   message_approval: 'Message to approve',
@@ -154,38 +155,13 @@ function ApprovalItem({ item, onDone }) {
   );
 }
 
-function FeedItem({ item }) {
-  return (
-    <div className="feed-item">
-      <div className="feed-rail"><i className={`feed-dot ${item.status}`} /></div>
-      <div className="feed-main">
-        <div className="feed-top">
-          <span className="feed-action">{item.action}</span>
-          {item.engine && <EngineTag engine={item.engine} />}
-        </div>
-        {item.detail && <div className="feed-detail">{item.detail}</div>}
-        <div className="feed-meta">
-          <span>{item.actor}</span>
-          {item.prospect_name && (
-            <>
-              <span>·</span>
-              <Link to={`/prospects/${item.prospect_id}`}>{item.prospect_name}</Link>
-            </>
-          )}
-          {item.campaign_name && <><span>·</span><span>{item.campaign_name}</span></>}
-          <span>·</span>
-          <span>{when(item.created_at)}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function Queue() {
   const { queue, campaigns, scope, setScope, refresh, connection, setError } = useApp();
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const live = campaigns.filter((c) => c.status === 'live');
   const target = scope || live[0]?.id;
@@ -225,6 +201,10 @@ export default function Queue() {
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
+        <button className="btn ghost sm" onClick={() => setHistoryOpen(true)} title="History">
+          <Icons.activity size={14} />
+          History
+        </button>
         <button className="btn ghost sm" onClick={refresh} title="Refresh">
           <Icons.refresh size={14} />
         </button>
@@ -288,65 +268,45 @@ export default function Queue() {
               </div>
             </div>
 
-            <div className="split">
-              <div className="panel">
-                <div className="panel-head">
-                  <h2>Needs a person</h2>
-                  <div className="spacer" />
-                  <div className="tabs" style={{ border: 0 }}>
-                    <button className={`tab ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>
-                      All {approvals.length > 0 && `(${approvals.length})`}
+            <div className="panel">
+              <div className="panel-head">
+                <h2>Needs a person</h2>
+                <div className="spacer" />
+                <div className="tabs" style={{ border: 0 }}>
+                  <button className={`tab ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>
+                    All {approvals.length > 0 && `(${approvals.length})`}
+                  </button>
+                  {Object.entries(counts).map(([type, n]) => (
+                    <button
+                      key={type}
+                      className={`tab ${filter === type ? 'on' : ''}`}
+                      onClick={() => setFilter(type)}
+                    >
+                      {TYPE_LABEL[type]?.split(' ')[0] ?? type} ({n})
                     </button>
-                    {Object.entries(counts).map(([type, n]) => (
-                      <button
-                        key={type}
-                        className={`tab ${filter === type ? 'on' : ''}`}
-                        onClick={() => setFilter(type)}
-                      >
-                        {TYPE_LABEL[type]?.split(' ')[0] ?? type} ({n})
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className={shown.length === 0 ? 'panel-body' : 'q-list'}>
-                  {shown.length === 0 ? (
-                    <Empty
-                      title={approvals.length === 0 ? 'Nothing is waiting on you' : 'Nothing of that kind'}
-                      sub={
-                        approvals.length === 0
-                          ? 'Press Run on a campaign to move prospects through the pipeline.'
-                          : 'Try another filter.'
-                      }
-                    />
-                  ) : (
-                    shown.map((a) => <ApprovalItem key={a.id} item={a} onDone={refresh} />)
-                  )}
+                  ))}
                 </div>
               </div>
-
-              <div className="panel">
-                <div className="panel-head">
-                  <h2>History</h2>
-                  <div className="spacer" />
-                  <span className="tiny muted">newest first</span>
-                </div>
-                <div className="panel-body tight">
-                  {queue.activity.length === 0 ? (
-                    <Empty
-                      title="Nothing has happened yet"
-                      sub="Every line here is written by a real run. Press Run and it fills up."
-                    />
-                  ) : (
-                    <div className="feed">
-                      {queue.activity.map((a) => <FeedItem key={a.id} item={a} />)}
-                    </div>
-                  )}
-                </div>
+              <div className={shown.length === 0 ? 'panel-body' : 'q-list'}>
+                {shown.length === 0 ? (
+                  <Empty
+                    title={approvals.length === 0 ? 'Nothing is waiting on you' : 'Nothing of that kind'}
+                    sub={
+                      approvals.length === 0
+                        ? 'Press Run on a campaign to move prospects through the pipeline.'
+                        : 'Try another filter.'
+                    }
+                  />
+                ) : (
+                  shown.map((a) => <ApprovalItem key={a.id} item={a} onDone={refresh} />)
+                )}
               </div>
             </div>
           </>
         )}
       </div>
+
+      {historyOpen && <HistoryModal onClose={() => setHistoryOpen(false)} />}
     </>
   );
 }

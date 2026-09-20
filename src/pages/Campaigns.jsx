@@ -13,10 +13,11 @@ import { ConnectionBanner } from '../App.jsx';
 import * as api from '../api/index.js';
 import { friendlyError } from '../api/client.js';
 import {
-  ActionButton, Banner, Empty, EngineTag, Icons, Loading, Modal, Note, Pill, Pipeline, Toggle, when,
+  ActionButton, Banner, Empty, Icons, Loading, Modal, Note, Pill, Pipeline, Toggle, when,
 } from '../components/ui.jsx';
 import { JobPanel } from '../components/JobWatcher.jsx';
 import NewCampaign from '../components/NewCampaign.jsx';
+import HistoryModal from '../components/HistoryModal.jsx';
 
 const CHANNELS = ['email', 'linkedin', 'sms', 'voice'];
 
@@ -29,34 +30,6 @@ const PROMPT_AGENTS = [
   ['personalisation', 'Personalisation', 'Length, register, and when to refuse to write.'],
   ['conversation', 'Conversation', 'How to read replies and what always needs a person.'],
 ];
-
-function ActivityFeed({ items }) {
-  if (items.length === 0) {
-    return <Empty title="Nothing has happened yet" sub="Press Run and every real step lands here." />;
-  }
-  return (
-    <div className="feed">
-      {items.map((a) => (
-        <div className="feed-item" key={a.id}>
-          <div className="feed-rail"><i className={`feed-dot ${a.status}`} /></div>
-          <div className="feed-main">
-            <div className="feed-top">
-              <span className="feed-action">{a.action}</span>
-              {a.engine && <EngineTag engine={a.engine} />}
-            </div>
-            {a.detail && <div className="feed-detail">{a.detail}</div>}
-            <div className="feed-meta">
-              <span>{a.actor}</span>
-              {a.prospect_name && <><span>·</span><span>{a.prospect_name}</span></>}
-              <span>·</span>
-              <span>{when(a.created_at)}</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 /* ── finding people ───────────────────────────────────────────────────── */
 
@@ -546,9 +519,9 @@ function Editor({ campaign, onClose, onSaved, initialTab = 'activity' }) {
   const [saved, setSaved] = useState(null);
   const [reps, setReps] = useState(null);
   const [newRepName, setNewRepName] = useState('');
-  const [activity, setActivity] = useState(null);
   const [detail, setDetail] = useState(null);
   const [jobId, setJobId] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
     api.getPrompts(campaign.id)
@@ -567,12 +540,8 @@ function Editor({ campaign, onClose, onSaved, initialTab = 'activity' }) {
 
   const loadActivity = useCallback(async () => {
     try {
-      const [c, feed] = await Promise.all([
-        api.getCampaign(campaign.id),
-        api.getActivity({ campaignId: campaign.id, limit: 60 }),
-      ]);
+      const c = await api.getCampaign(campaign.id);
       setDetail(c);
-      setActivity(feed);
       // A run started from the campaign list, or from another tab, should be
       // visible here rather than leaving this screen looking idle.
       if (c.running_job && !jobId) setJobId(c.running_job.id);
@@ -677,6 +646,9 @@ function Editor({ campaign, onClose, onSaved, initialTab = 'activity' }) {
               Every line below was written by a real run. Nothing here is typed in ahead of time.
             </span>
             <div className="spacer" />
+            <button className="btn ghost sm" onClick={() => setHistoryOpen(true)}>
+              <Icons.activity size={13} /> History
+            </button>
             <ActionButton
               className="btn primary sm"
               onClick={run}
@@ -706,15 +678,15 @@ function Editor({ campaign, onClose, onSaved, initialTab = 'activity' }) {
           {!detail ? (
             <Loading label="Loading activity" />
           ) : (
-            <>
-              <Pipeline funnel={detail.funnel} />
-              <div className="panel">
-                <div className="panel-head"><h3>History</h3></div>
-                <div className="panel-body tight">
-                  <ActivityFeed items={activity ?? []} />
-                </div>
-              </div>
-            </>
+            <Pipeline funnel={detail.funnel} />
+          )}
+
+          {historyOpen && (
+            <HistoryModal
+              campaignId={campaign.id}
+              title={`History — ${campaign.name}`}
+              onClose={() => setHistoryOpen(false)}
+            />
           )}
         </div>
       )}

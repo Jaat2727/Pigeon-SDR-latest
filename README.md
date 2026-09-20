@@ -452,13 +452,25 @@ it holds across every campaign rather than only the one they replied to.
 | Screen | What it is for |
 |---|---|
 | **Dashboard** | Every campaign at a glance. Real counts only. |
-| **Campaigns** | Create, edit, duplicate, find people, import, run, pause. Click a campaign's name for its Activity tab: the funnel, the live history, and the Run button. Also has Targeting, Execution and a per-campaign per-agent prompt editor. |
+| **Campaigns** | Create, edit, duplicate, delete, find people, import, run, pause. Click a campaign's name for its Activity tab: the funnel, the Run button, and a History button that opens that campaign's history. Also has Targeting, Execution and a per-campaign per-agent prompt editor. Deleting asks one real question: keep its prospects for a future campaign to find again, or delete whoever was only in this one. |
 | **Prospects** | Every prospect, across all campaigns by default. One row per campaign membership, since state is per campaign. |
 | **Prospect detail** | The full profile, the per-campaign verdicts side by side, the message thread, the agent run history. |
-| **Queue** | The home screen. Approvals waiting on a person, the pipeline funnel, the activity feed. |
-| **Agents** | How the agents fit together, per-agent statistics, the key health panel, and the playground. |
+| **Queue** | The home screen. Approvals waiting on a person, the pipeline funnel, and a History button. |
+| **Inbox** | Every sent and received message, across every campaign, as a list and a reading pane rather than a table. Reply simulation happens inline. |
 | **Knowledge** | The source material personalisation is allowed to cite, with a retrieval preview. Lexical search over term overlap, not embeddings, and labelled as such. |
-| **Controls** | What is running, what is stopping it, and the switches. |
+| **Settings → Agents** | How the agents fit together, per-agent statistics, the key health panel, and the playground. Grouped under Settings, not the main list — configuration, not day-to-day work. |
+| **Settings → Controls** | What is running, what is stopping it, the switches, and the SMTP delivery status (including sandbox mode, if it is on). |
+
+### History
+
+History is a floating window (`HistoryModal`), not a panel wedged into a page.
+One component, two entry points: the **History** button on Queue opens it
+unscoped — every event, every campaign, every person — and the same button on
+a campaign's Activity tab opens it pre-filtered to that campaign. Either way
+it is the same live feed (`GET /queue/activity`), with a text search across
+what happened, who it happened to, and which company, plus a campaign
+dropdown in the unscoped view. Closing it returns you to exactly the screen
+you had open — it is an overlay, not a navigation.
 
 ### Creating a campaign
 
@@ -601,6 +613,7 @@ compiled into the JavaScript the browser downloads.
 | `SMTP_PASS` | | For Gmail, an App Password (myaccount.google.com/apppasswords), not the login password |
 | `SMTP_FROM` | `SMTP_USER` | Most providers require this to be the authenticated account or a verified alias |
 | `SMTP_TIMEOUT_MS` | `15000` | |
+| `SMTP_SANDBOX_TO` | | Every send redirects here instead of the real address, even for a prospect with no email at all. For testing the full approve-and-send path without real inboxes. The real intended recipient stays in the subject line and the activity log — never delete it silently, remove this variable before a real send should go out. |
 
 **Running**
 
@@ -717,7 +730,8 @@ server/
     04-runtime.sql           jobs, locks, run attribution, discovery sources
   scripts/
     verify.js                139 offline checks
-    verify-failover.js       19 checks against scripted providers
+    verify-failover.js       22 checks against scripted providers
+    verify-models.js         29 checks on model discovery and fallback
   src/
     agents/
       keyPool.js             up to six keys per provider, health and rotation
@@ -738,7 +752,8 @@ server/
       activity.js            the timeline and approvals
       metrics.js             every number, counted from rows
       mappers.js             database row to API shape
-    routes/                  one file per resource
+      mailer.js              real SMTP delivery via Nodemailer, sandbox mode
+    routes/                  one file per resource — messages.js is the Inbox
     config.js                every environment variable, declared once
     worker.js                the optional background loop
 
@@ -747,6 +762,7 @@ src/
   components/
     JobWatcher.jsx           polling a job, and the progress panel
     NewCampaign.jsx          the four-step builder
+    HistoryModal.jsx         the floating history window, global or per campaign
     ui.jsx                   shared primitives
   pages/                     one file per screen
   styles/app.css             one stylesheet, no component library
