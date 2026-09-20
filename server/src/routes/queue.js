@@ -186,6 +186,15 @@ router.post('/approvals/:id/approve', asyncHandler(async (req, res) => {
       break;
   }
 
+  // A blocked send (no email on record, a gate check, a live duplicate) is not
+  // a decision — the person still needs to act on it. Closing the approval
+  // here would drop it out of the queue with nothing left to retry once the
+  // underlying problem (e.g. SMTP not configured) is fixed.
+  if (outcome.action === 'blocked') {
+    res.json({ approval, outcome });
+    return;
+  }
+
   const resolved = await resolveApproval(req.params.id, { status: 'approved', actor, note });
   res.json({ approval: resolved, outcome });
 }));
