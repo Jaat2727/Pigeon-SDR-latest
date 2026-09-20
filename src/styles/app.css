@@ -4,40 +4,30 @@
    =========================================================================== */
 
 :root {
-  /* Surfaces. Warm neutrals rather than pure grey: a screen someone stares at
-     all day should not be lit like a spreadsheet. */
-  --bg:            #faf9f7;
-  --surface:       #ffffff;
-  --surface-2:     #f5f4f1;
-  --surface-3:     #edebe7;
-
-  --line:          #e3e0db;
-  --line-strong:   #cfcbc4;
-
-  --ink:           #1b1a18;
-  --ink-2:         #56534e;
-  --ink-3:         #8a8681;
-
-  /* One accent. Everything interactive is this colour and nothing else is. */
-  --accent:        #2f4fd8;
-  --accent-ink:    #1e38a8;
-  --accent-wash:   #eef1fe;
-
-  /* Semantic, used only for state. */
-  --ok:            #1a7f4b;
-  --ok-wash:       #e8f5ee;
-  --warn:          #9a6413;
-  --warn-wash:     #fdf2e0;
-  --stop:          #b3261e;
-  --stop-wash:     #fdecea;
-
-  --r:   6px;
-  --r-lg: 10px;
-
-  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-
-  --sidebar: 212px;
+  --bg: #090b0d;
+  --surface: #101417;
+  --surface-2: #151b1f;
+  --surface-3: #1c252a;
+  --line: #263238;
+  --line-strong: #3b4a51;
+  --ink: #f3f7e8;
+  --ink-2: #a5b2ad;
+  --ink-3: #68777a;
+  --accent: #d6ff38;
+  --accent-ink: #a8d900;
+  --accent-wash: rgba(214, 255, 56, 0.12);
+  --violet: #8b5cf6;
+  --ok: #66e3a1;
+  --ok-wash: rgba(102, 227, 161, 0.12);
+  --warn: #ffc857;
+  --warn-wash: rgba(255, 200, 87, 0.12);
+  --stop: #ff6b6b;
+  --stop-wash: rgba(255, 107, 107, 0.12);
+  --r: 8px;
+  --r-lg: 14px;
+  --sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --sidebar: 244px;
 }
 
 * { box-sizing: border-box; }
@@ -52,6 +42,8 @@ body {
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  background-image: linear-gradient(rgba(214,255,56,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(214,255,56,.025) 1px, transparent 1px);
+  background-size: 32px 32px;
 }
 
 a { color: inherit; text-decoration: none; }
@@ -64,7 +56,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sidebar {
   width: var(--sidebar);
   flex: 0 0 var(--sidebar);
-  background: var(--surface);
+  background: linear-gradient(180deg, #101417 0%, #0b0e10 100%);
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
@@ -82,10 +74,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 
 .brand-mark {
-  width: 24px; height: 24px;
-  border-radius: 6px;
-  background: var(--ink);
-  color: #fff;
+  width: 30px; height: 30px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #0a0d0f;
   display: grid; place-items: center;
   font-size: 12px; font-weight: 600;
   flex: 0 0 auto;
@@ -159,9 +151,10 @@ h3 { font-size: 13.5px; }
 /* ── surfaces ────────────────────────────────────────────────────────── */
 
 .panel {
-  background: var(--surface);
+  background: linear-gradient(145deg, rgba(21,27,31,.96), rgba(13,17,19,.96));
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
+  box-shadow: 0 14px 40px rgba(0,0,0,.16);
 }
 .panel-head {
   padding: 12px 14px;
@@ -278,7 +271,7 @@ table.data tbody tr.clickable:hover { background: var(--surface-2); }
 .btn:hover:not(:disabled) { background: var(--surface-2); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #0a0d0f; box-shadow: 0 0 22px rgba(214,255,56,.18); }
 .btn.primary:hover:not(:disabled) { background: var(--accent-ink); border-color: var(--accent-ink); }
 
 .btn.danger { background: var(--stop); border-color: var(--stop); color: #fff; }
