@@ -525,10 +525,10 @@ compiled into the JavaScript the browser downloads.
 | Variable | Default | What it is |
 |---|---|---|
 | `GROQ_API_KEY` | | Up to six keys, comma separated. Or `GROQ_API_KEY_1` … `_6`. |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | |
+| `GROQ_MODEL` | `llama3-70b-8192` | |
 | `GROQ_MODEL_FALLBACKS` | `llama-3.1-8b-instant,…` | Tried if the model above is rejected as unknown |
 | `GEMINI_API_KEY` | | Up to six keys, same rules |
-| `GEMINI_MODEL` | `gemini-3.6-flash` | |
+| `GEMINI_MODEL` | `gemini-1.5-flash` | |
 | `GEMINI_MODEL_FALLBACKS` | `gemini-2.5-flash,…` | |
 | `LLM_PROVIDER_ORDER` | `groq,gemini` | |
 | `LLM_TIMEOUT_MS` | `30000` | |

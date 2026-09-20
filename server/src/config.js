@@ -127,13 +127,13 @@ export const env = {
   LLM_TIMEOUT_MS: int('LLM_TIMEOUT_MS', 30000),
 
   GROQ_KEY_COUNT: groqConfigured,
-  GROQ_MODEL: str('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+  GROQ_MODEL: str('GROQ_MODEL', 'openai/gpt-oss-120b'),
   // Tried in order when the named model is rejected as unknown. A retired
   // model name is one of the most common ways this layer breaks, and it
   // presents as "every provider failed", which sends you looking at keys.
   GROQ_MODEL_FALLBACKS: list('GROQ_MODEL_FALLBACKS', [
-    'llama-3.1-8b-instant',
-    'llama-3.3-70b-versatile',
+    'openai/gpt-oss-20b',
+    'openai/gpt-oss-120b',
   ]),
 
   GEMINI_KEY_COUNT: geminiConfigured,

@@ -10,8 +10,8 @@
  */
 process.env.GROQ_API_KEY = 'gsk_alpha_1111,gsk_bravo_2222,gsk_charlie_33';
 process.env.GEMINI_API_KEY = 'AIza_gem_one_1,AIza_gem_two_2';
-process.env.GROQ_MODEL = 'llama-3.3-70b-versatile';
-process.env.GROQ_MODEL_FALLBACKS = 'llama-3.1-8b-instant';
+process.env.GROQ_MODEL = 'openai/gpt-oss-120b';
+process.env.GROQ_MODEL_FALLBACKS = 'openai/gpt-oss-20b';
 process.env.LLM_TIMEOUT_MS = '3000';
 
 const { callLlm } = await import('../src/agents/llmEngine.js');
@@ -70,14 +70,14 @@ let modelsTried = [];
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
   modelsTried.push(body.model);
-  if (body.model === 'llama-3.3-70b-versatile') {
-    return new Response('{"error":{"message":"The model `llama-3.3-70b-versatile` has been decommissioned"}}', { status: 400 });
+  if (body.model === 'openai/gpt-oss-120b') {
+    return new Response('{"error":{"message":"The model `openai/gpt-oss-120b` has been decommissioned"}}', { status: 400 });
   }
   return good(body.model);
 };
 r = await callLlm('conversation', payload);
-ok('it climbed to the fallback model', r.model === 'llama-3.1-8b-instant', r.model);
-ok('both models were tried in order', modelsTried.join(' → ') === 'llama-3.3-70b-versatile → llama-3.1-8b-instant', modelsTried.join(' → '));
+ok('it climbed to the fallback model', r.model === 'openai/gpt-oss-20b', r.model);
+ok('both models were tried in order', modelsTried.join(' → ') === 'openai/gpt-oss-120b → openai/gpt-oss-20b', modelsTried.join(' → '));
 ok('the key kept its clean record', poolStatus('groq').healthy === 1);
 ok('the key is not blamed for it', keyHealth().find(p => p.provider === 'groq').keys[0].failed === 0);
 
@@ -85,7 +85,7 @@ ok('the key is not blamed for it', keyHealth().find(p => p.provider === 'groq').
 console.log('\n4 · the second call remembers which model worked');
 modelsTried = [];
 r = await callLlm('conversation', payload);
-ok('it goes straight to the working model', modelsTried.join('') === 'llama-3.1-8b-instant', modelsTried.join(' → '));
+ok('it goes straight to the working model', modelsTried.join('') === 'openai/gpt-oss-20b', modelsTried.join(' → '));
 
 /* 5 · a malformed request is not retried on five more keys */
 console.log('\n5 · a malformed request is not retried on five more keys');
